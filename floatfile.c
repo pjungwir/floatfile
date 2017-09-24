@@ -501,7 +501,6 @@ static ArrayType *_load_floatfile(const char *tablespace, const char *filename) 
   float8 *floats;
   Datum* datums;
   int arrlen;
-  char *errstr = NULL;
   int16 floatTypeWidth;
   bool floatTypeByValue;
   char floatTypeAlignmentCode;
@@ -517,32 +516,39 @@ static ArrayType *_load_floatfile(const char *tablespace, const char *filename) 
   // they show up in pg_locks and we get free deadlock detection.
   DirectFunctionCall2(pg_advisory_lock_shared_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
 
-  arrlen = load_file_to_floats(tablespace, filename, &floats, &nulls);
-  if (arrlen < 0) {
-    errstr = strerror(errno);
-    goto quit;
-  }
-  
-  // I don't think we can use the preprocessor here
-  // because it is defined as `true` aka `((bool) 1)`,
-  // and the preprocessor doesn't know what a `bool` is yet:
-  if (SAFE_TO_CAST_FLOATS_AND_DATUMS) {
-    datums = (Datum *)floats;
-  } else {
-    datums = palloc(arrlen * sizeof(Datum));
-    for (i = 0; i < arrlen; i++) {
-      datums[i] = Float8GetDatum(floats[i]);
+  PG_TRY();
+  {
+    arrlen = load_file_to_floats(tablespace, filename, &floats, &nulls);
+    if (arrlen < 0) {
+      ereport(ERROR, (errmsg("Failed to load floatfile: %s", strerror(errno))));
     }
+
+    // I don't think we can use the preprocessor here
+    // because it is defined as `true` aka `((bool) 1)`,
+    // and the preprocessor doesn't know what a `bool` is yet:
+    if (SAFE_TO_CAST_FLOATS_AND_DATUMS) {
+      datums = (Datum *)floats;
+    } else {
+      datums = palloc(arrlen * sizeof(Datum));
+      for (i = 0; i < arrlen; i++) {
+        datums[i] = Float8GetDatum(floats[i]);
+      }
+    }
+
+    get_typlenbyvalalign(FLOAT8OID, &floatTypeWidth, &floatTypeByValue, &floatTypeAlignmentCode);
+    dims[0] = arrlen;
+    lbs[0] = 1;
+    result = construct_md_array(datums, nulls, 1, dims, lbs, FLOAT8OID, floatTypeWidth, floatTypeByValue, floatTypeAlignmentCode);
   }
+  PG_CATCH();
+  {
+    DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
 
-  get_typlenbyvalalign(FLOAT8OID, &floatTypeWidth, &floatTypeByValue, &floatTypeAlignmentCode);
-  dims[0] = arrlen;
-  lbs[0] = 1;
-  result = construct_md_array(datums, nulls, 1, dims, lbs, FLOAT8OID, floatTypeWidth, floatTypeByValue, floatTypeAlignmentCode);
-
-quit:
   DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
-  if (errstr) elog(ERROR, "%s", errstr);
+
   return result;
 }
 
@@ -612,7 +618,6 @@ static void _save_floatfile(const char *tablespace, const char *filename, ArrayT
   float8 *floats;
   Datum* datums;
   int arrlen;
-  char *errstr = NULL;
   Oid valsType;
   int16 floatTypeWidth;
   bool floatTypeByValue;
@@ -642,17 +647,20 @@ static void _save_floatfile(const char *tablespace, const char *filename, ArrayT
   }
 
   DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
-
-  if (save_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
-    errstr = strerror(errno);
-    goto quit;
+  PG_TRY();
+  {
+    if (save_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
+      ereport(ERROR, (errmsg("Failed to save floatfile: %s", strerror(errno))));
+    }
   }
+  PG_CATCH();
+  {
+    DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
 
-  // Nothing left to do actually!
-
-quit:
   DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
-  if (errstr) elog(ERROR, "%s", errstr);
 }
 
 Datum save_floatfile(PG_FUNCTION_ARGS);
@@ -728,7 +736,6 @@ static void _extend_floatfile(const char *tablespace, const char *filename, Arra
   float8 *floats;
   Datum* datums;
   int arrlen;
-  char *errstr = NULL;
   Oid valsType;
   int16 floatTypeWidth;
   bool floatTypeByValue;
@@ -758,19 +765,20 @@ static void _extend_floatfile(const char *tablespace, const char *filename, Arra
   }
 
   DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
-
-  if (extend_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
-    errstr = strerror(errno);
-    goto quit;
+  PG_TRY();
+  {
+    if (extend_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
+      ereport(ERROR, (errmsg("Failed to extend floatfile: %s", strerror(errno))));
+    }
   }
+  PG_CATCH();
+  {
+    DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
 
-  // Nothing left to do actually!
-
-quit:
-  // TODO: Probably need to catch and reraise instead:
   DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
-  if (errstr) elog(ERROR, "%s", errstr);
-
 }
 
 Datum extend_floatfile(PG_FUNCTION_ARGS);
@@ -835,40 +843,43 @@ extend_floatfile_in_tablespace(PG_FUNCTION_ARGS) {
 
 
 
-static int _drop_floatfile(const char *tablespace, const char *filename) {
+static void _drop_floatfile(const char *tablespace, const char *filename) {
   char root_directory[FLOATFILE_MAX_PATH + 1],
        relative_target[FLOATFILE_MAX_PATH + 1],
        path[FLOATFILE_MAX_PATH + 1];
   int pathlen;
   int32 filename_hash;
-  char *errstr = NULL;
 
   filename_hash = hash_filename(filename);
-
-  DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
 
   validate_target_filename(filename);
   pathlen = floatfile_filename_to_full_path(tablespace, filename, path, FLOATFILE_MAX_PATH + 1);
 
-  if (unlink(path)) return -1;
+  DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
+  PG_TRY();
+  {
+    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete %s", path)));
 
-  path[pathlen - 1] = FLOATFILE_FLOATS_SUFFIX;
-  if (unlink(path)) return -1;
+    path[pathlen - 1] = FLOATFILE_FLOATS_SUFFIX;
+    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete %s", path)));
 
-  // If that was the last file, remove the floatfile dir too
-  // so users can drop the tablespace:
+    // If that was the last file, remove the floatfile dir too
+    // so users can drop the tablespace:
 
-  floatfile_root_path(tablespace, root_directory, FLOATFILE_MAX_PATH + 1);
-  floatfile_relative_target_path(filename, relative_target, FLOATFILE_MAX_PATH + 1);
-  if (rmdirs_for_floatfile(root_directory, relative_target)) {
-    errstr = strerror(errno);
-    goto quit;
+    floatfile_root_path(tablespace, root_directory, FLOATFILE_MAX_PATH + 1);
+    floatfile_relative_target_path(filename, relative_target, FLOATFILE_MAX_PATH + 1);
+    if (rmdirs_for_floatfile(root_directory, relative_target)) {
+      ereport(ERROR, (errmsg("Failed in rmdirs_for_floatfile: %s", strerror(errno))));
+    }
   }
+  PG_CATCH();
+  {
+    DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
+    PG_RE_THROW();
+  }
+  PG_END_TRY();
 
-quit:
   DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
-  if (errstr) elog(ERROR, "%s", errstr);
-  return EXIT_SUCCESS;
 }
 
 Datum drop_floatfile(PG_FUNCTION_ARGS);

@@ -120,6 +120,7 @@ TODO
 - Some way to ask for the current floatfiles and what tablespaces they live in would be nice,
   especially so you don't get stuck unable to drop a tablespace and unsure why.
 
+- Better durability as described above: separate file with the length of the array. Also fsync.
 
 
 Author

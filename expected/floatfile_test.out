@@ -29,6 +29,7 @@ SELECT drop_floatfile('test');
  
 (1 row)
 
+-- Tablespace tests:
 DROP TABLESPACE IF EXISTS testspace;
 NOTICE:  tablespace "testspace" does not exist, skipping
 \! test -d /tmp/testspace || echo "* * * Can't test tablespaces unless you mkdir /tmp/testspace and chown it to the postgres user * * *"
@@ -64,3 +65,32 @@ SELECT drop_floatfile('testspace', 'test');
 (1 row)
 
 DROP TABLESPACE testspace;
+-- Tests about releasing advisory locks:
+SELECT  classid, objid
+FROM    pg_locks
+WHERE   database = (SELECT oid FROM pg_database WHERE datname = current_database())
+AND     locktype = 'advisory';
+ classid | objid 
+---------+-------
+(0 rows)
+
+SELECT load_floatfile('nofile');
+ERROR:  Failed to load floatfile: No such file or directory
+SELECT  classid, objid
+FROM    pg_locks
+WHERE   database = (SELECT oid FROM pg_database WHERE datname = current_database())
+AND     locktype = 'advisory';
+ classid | objid 
+---------+-------
+(0 rows)
+
+SELECT extend_floatfile('nofile', '{1,2,3}'::float[]);
+ERROR:  Failed to extend floatfile: No such file or directory
+SELECT  classid, objid
+FROM    pg_locks
+WHERE   database = (SELECT oid FROM pg_database WHERE datname = current_database())
+AND     locktype = 'advisory';
+ classid | objid 
+---------+-------
+(0 rows)
+
