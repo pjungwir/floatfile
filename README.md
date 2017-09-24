@@ -66,7 +66,8 @@ but there are some drawbacks:
 
 - **Security:** Anyone who has `EXECUTE` permission on our functions can open *any* `floatfile` in the current database (reading or writing depends on which function). So make sure that's okay before using this extension!
 
-- **Replication:** Your `floatfile`s are not replicated! If you rely on replication, I'd make sure that you only use `floatfiles` for derived data, so that you can reconstruct them if necessary. (You could even run a job that builds them on both the master and the slave. It is legal to create `floatfiles` on a warm standby since they aren't doing any writing that Postgres knows about. TODO: Make sure this is true of taking advisory locks!)
+- **Replication:** Your `floatfile`s are not replicated! If you rely on replication, I'd make sure that you only use `floatfiles` for derived data, so that you can reconstruct them if necessary.
+Unfortunately you can't simply repeat the same commands on the standby as the master, since taking advisory locks requires write access. So you'll have to sync the files some other way, e.g. rsync. Perhaps logical replication in Postgres 10 will solve this.
 
 - **Backups:** These files won't appear in your `pg_dump` output, so if you are using that for backups, you need to do something extra to include these files.
 
