@@ -14,6 +14,8 @@ This extension offers several functions:
 
 This creates a new file inside your Postgres data directory with the values of the array you provide. (Technically it is two files: one for the floats and one for the nulls.) If either `filename` or `vals` is `NULL` then this does nothing. If `vals` has some `NULL` elements, they will be remembered.
 
+If `filename` already exists, this function will fail.
+
 `load_floatfile(filename TEXT)` - Returns a float array with the contents of the file.
 
 `extend_floatfile(filename TEXT, newvals FLOAT[])` - Adds `newvals` to the end of `filename`. If `filename` doesn't exist yet, it will be created.
@@ -122,6 +124,7 @@ TODO
 
 - Better durability as described above: separate file with the length of the array. Also fsync.
 
+- Any hooks in `DROP DATABASE` so we can clean up files when it happens?
 
 Author
 ------

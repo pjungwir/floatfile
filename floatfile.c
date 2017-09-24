@@ -362,7 +362,7 @@ static int save_file_from_floats(const char *tablespace, const char *filename, f
   // Save the nulls:
 
   // path[pathlen - 1] = FLOATFILE_NULLS_SUFFIX;
-  fd = open(path, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+  fd = open(path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd == -1) return -1;
 
   bytes_written = write(fd, nulls, array_len * sizeof(bool));
@@ -375,7 +375,7 @@ static int save_file_from_floats(const char *tablespace, const char *filename, f
   // Save the floats:
 
   path[pathlen - 1] = FLOATFILE_FLOATS_SUFFIX;
-  fd = open(path, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+  fd = open(path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
   if (fd == -1) return -1;
 
   bytes_written = write(fd, vals, array_len * sizeof(float8));
@@ -402,6 +402,8 @@ bail:
  * Returns 0 on success or -1 on failure (and sets errno).
  */
 static int extend_file_from_floats(const char *tablespace, const char *filename, float8* vals, bool* nulls, int array_len) {
+  char root_directory[FLOATFILE_MAX_PATH + 1],
+       relative_target[FLOATFILE_MAX_PATH + 1];
   char path[FLOATFILE_MAX_PATH + 1];
   int pathlen;
   int fd;
@@ -409,13 +411,17 @@ static int extend_file_from_floats(const char *tablespace, const char *filename,
   int err;
 
   validate_target_filename(filename);
-  pathlen = floatfile_filename_to_full_path(tablespace, filename, path, FLOATFILE_MAX_PATH + 1);
+  floatfile_root_path(tablespace, root_directory, FLOATFILE_MAX_PATH + 1);
+  floatfile_relative_target_path(filename, relative_target, FLOATFILE_MAX_PATH + 1);
 
+  mkdirs_for_floatfile(root_directory, relative_target);
+
+  pathlen = floatfile_filename_to_full_path(tablespace, filename, path, FLOATFILE_MAX_PATH + 1);
 
   // Save the nulls:
 
   // path[pathlen - 1] = FLOATFILE_NULLS_SUFFIX;
-  fd = open(path, O_WRONLY | O_APPEND);
+  fd = open(path, O_WRONLY | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR);
   if (fd == -1) return -1;
 
   bytes_written = write(fd, nulls, array_len * sizeof(bool));
@@ -427,7 +433,7 @@ static int extend_file_from_floats(const char *tablespace, const char *filename,
   // Save the floats:
 
   path[pathlen - 1] = FLOATFILE_FLOATS_SUFFIX;
-  fd = open(path, O_WRONLY | O_APPEND);
+  fd = open(path, O_WRONLY | O_APPEND | O_CREAT, S_IRUSR | S_IWUSR);
   if (fd == -1) return -1;
 
   bytes_written = write(fd, vals, array_len * sizeof(float8));
@@ -520,7 +526,7 @@ static ArrayType *_load_floatfile(const char *tablespace, const char *filename) 
   {
     arrlen = load_file_to_floats(tablespace, filename, &floats, &nulls);
     if (arrlen < 0) {
-      ereport(ERROR, (errmsg("Failed to load floatfile: %s", strerror(errno))));
+      ereport(ERROR, (errmsg("Failed to load floatfile %s: %s", filename, strerror(errno))));
     }
 
     // I don't think we can use the preprocessor here
@@ -650,7 +656,7 @@ static void _save_floatfile(const char *tablespace, const char *filename, ArrayT
   PG_TRY();
   {
     if (save_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
-      ereport(ERROR, (errmsg("Failed to save floatfile: %s", strerror(errno))));
+      ereport(ERROR, (errmsg("Failed to save floatfile %s: %s", filename, strerror(errno))));
     }
   }
   PG_CATCH();
@@ -768,7 +774,7 @@ static void _extend_floatfile(const char *tablespace, const char *filename, Arra
   PG_TRY();
   {
     if (extend_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
-      ereport(ERROR, (errmsg("Failed to extend floatfile: %s", strerror(errno))));
+      ereport(ERROR, (errmsg("Failed to extend floatfile %s: %s", filename, strerror(errno))));
     }
   }
   PG_CATCH();
@@ -858,10 +864,10 @@ static void _drop_floatfile(const char *tablespace, const char *filename) {
   DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
   PG_TRY();
   {
-    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete %s", path)));
+    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete floatfile %s: %s", filename, strerror(errno))));
 
     path[pathlen - 1] = FLOATFILE_FLOATS_SUFFIX;
-    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete %s", path)));
+    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete floatfile %s: %s", filename, strerror(errno))));
 
     // If that was the last file, remove the floatfile dir too
     // so users can drop the tablespace:

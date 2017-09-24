@@ -29,6 +29,46 @@ SELECT drop_floatfile('test');
  
 (1 row)
 
+-- Can't overwrite a file without removing it first:
+SELECT save_floatfile('newtest', '{7,7,7}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT save_floatfile('newtest', '{7,7,7}'::float[]);
+ERROR:  Failed to save floatfile newtest: File exists
+SELECT load_floatfile('newtest');
+ load_floatfile 
+----------------
+ {7,7,7}
+(1 row)
+
+SELECT drop_floatfile('newtest');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+-- Appending creates the file if necessary:
+SELECT extend_floatfile('newtest', '{NULL,5}'::float[]);
+ extend_floatfile 
+------------------
+ 
+(1 row)
+
+SELECT load_floatfile('newtest');
+ load_floatfile 
+----------------
+ {NULL,5}
+(1 row)
+
+SELECT drop_floatfile('newtest');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
 -- Tablespace tests:
 DROP TABLESPACE IF EXISTS testspace;
 NOTICE:  tablespace "testspace" does not exist, skipping
@@ -75,7 +115,7 @@ AND     locktype = 'advisory';
 (0 rows)
 
 SELECT load_floatfile('nofile');
-ERROR:  Failed to load floatfile: No such file or directory
+ERROR:  Failed to load floatfile nofile: No such file or directory
 SELECT  classid, objid
 FROM    pg_locks
 WHERE   database = (SELECT oid FROM pg_database WHERE datname = current_database())
@@ -84,8 +124,30 @@ AND     locktype = 'advisory';
 ---------+-------
 (0 rows)
 
-SELECT extend_floatfile('nofile', '{1,2,3}'::float[]);
-ERROR:  Failed to extend floatfile: No such file or directory
+SELECT save_floatfile('nofile', '{1,2,3}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT save_floatfile('nofile', '{1,2,3}'::float[]);
+ERROR:  Failed to save floatfile nofile: File exists
+SELECT  classid, objid
+FROM    pg_locks
+WHERE   database = (SELECT oid FROM pg_database WHERE datname = current_database())
+AND     locktype = 'advisory';
+ classid | objid 
+---------+-------
+(0 rows)
+
+SELECT drop_floatfile('nofile');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT drop_floatfile('nofile');
+ERROR:  Failed to delete floatfile nofile: No such file or directory
 SELECT  classid, objid
 FROM    pg_locks
 WHERE   database = (SELECT oid FROM pg_database WHERE datname = current_database())
