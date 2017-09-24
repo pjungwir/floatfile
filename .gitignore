@@ -1,0 +1,9 @@
+*.s
+*.o
+*.so
+.*.swp
+.*.swo
+/floatfile*.zip
+/regression.diffs
+/regression.out
+/results
