@@ -23,6 +23,14 @@ AS 'floatfile', 'extend_floatfile'
 LANGUAGE c VOLATILE;
 
 CREATE OR REPLACE FUNCTION
+drop_floatfile(text)
+RETURNS void
+AS 'floatfile', 'drop_floatfile'
+LANGUAGE c VOLATILE;
+
+
+
+CREATE OR REPLACE FUNCTION
 save_floatfile(text, text, float[])
 RETURNS void
 AS 'floatfile', 'save_floatfile_in_tablespace'
@@ -39,3 +47,10 @@ extend_floatfile(text, text, float[])
 RETURNS void
 AS 'floatfile', 'extend_floatfile_in_tablespace'
 LANGUAGE c VOLATILE;
+
+CREATE OR REPLACE FUNCTION
+drop_floatfile(text, text)
+RETURNS void
+AS 'floatfile', 'drop_floatfile_in_tablespace'
+LANGUAGE c VOLATILE;
+

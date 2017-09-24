@@ -18,6 +18,8 @@ This creates a new file inside your Postgres data directory with the values of t
 
 `extend_floatfile(filename TEXT, newvals FLOAT[])` - Adds `newvals` to the end of `filename`. If `filename` doesn't exist yet, it will be created.
 
+`drop_floatfile(filename TEXT)` - Deletes `filename`.
+
 In addition there are tablespace versions of these functions so you can put the files somewhere else:
 
 `save_floatfile(tablespace TEXT, filename TEXT, vals FLOAT[])` - Saves an array to a new file in `tablespace`.
@@ -26,10 +28,12 @@ In addition there are tablespace versions of these functions so you can put the 
 
 `extend_floatfile(tablespace TEXT, filename TEXT, vals FLOAT[])` - Extends an array to `filename` in `tablespace`.
 
-Note in all cases `tablespace` should be the *name* of the tablespace, not its location on disk.
-If it is `NULL` then the data directory is used.
+`drop_floatfile(tablespace TEXT, filename TEXT)` - Deletes `filename`.
 
-All these functions use [Postgres advisory locks](https://www.postgresql.org/docs/current/static/explicit-locking.html#ADVISORY-LOCKS). `load_floatfile` takes a shared lock, and `save` and `load` take an exclusive one. They use [the two-arg versions of the functions](https://www.postgresql.org/docs/current/static/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS), using `0xF107F11E` for the first arg and the [djb2 hash of the user-provided filename](http://www.cse.yorku.ca/~oz/hash.html) for the second one. (See the source code comments for my thoughts on birthday collisions.) You can change the value of the first arg by compiling with a different `FLOATFILE_LOCK_PREFIX`.
+Note in all cases `tablespace` should be the *name* of the tablespace, not its location on disk.
+If it is `NULL` then the default tablespace is used (normally the data directory).
+
+All these functions use [Postgres advisory locks](https://www.postgresql.org/docs/current/static/explicit-locking.html#ADVISORY-LOCKS). `load_floatfile` takes a shared lock, and `save`, `extend`, and `drop` take an exclusive one. They use [the two-arg versions of the functions](https://www.postgresql.org/docs/current/static/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS), using `0xF107F11E` for the first arg and the [djb2 hash of the user-provided filename](http://www.cse.yorku.ca/~oz/hash.html) for the second one. (See the source code comments for my thoughts on birthday collisions.) You can change the value of the first arg by compiling with a different `FLOATFILE_LOCK_PREFIX`.
 If you really can't stand that this uses advisory locks at all,
 then I could probably add a compile-time option to use POSIX file locking instead,
 but then you won't see those locks in `pg_locks`
@@ -56,7 +60,7 @@ This extension is designed for very fast queries
 without paying a high price to keep extending the array,
 but there are some drawbacks:
 
-- **Updates:** You can append to the end of an array, but you can't change elements in the middle of it. I suppose when I (or you) need this I will add a function to remove a file or replace a file. That will be a little expensive, but random write access is not really the intended use of this extension.
+- **Updates:** You can append to the end of an array, but you can't change elements in the middle of it. If you really need to you can drop the floatfile and make a new one. That will be a little expensive, but random write access is not really the intended use of this extension. Perhaps someday I'll add a feature to update just specific elements in the array though.
 
 - **Security:** Anyone who has `EXECUTE` permission on our functions can open *any* `floatfile` in the current database (reading or writing depends on which function). So make sure that's okay before using this extension!
 
@@ -107,6 +111,14 @@ Of course.
 
 I doubt it.
 (I am available for hire if you need this though. :-)
+
+
+
+TODO
+----
+
+- Some way to ask for the current floatfiles and what tablespaces they live in would be nice,
+  especially so you don't get stuck unable to drop a tablespace and unsure why.
 
 
 

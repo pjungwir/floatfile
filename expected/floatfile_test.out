@@ -23,3 +23,44 @@ SELECT load_floatfile('test');
  {1,2,3,NULL,4,NULL,NULL,5}
 (1 row)
 
+SELECT drop_floatfile('test');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+DROP TABLESPACE IF EXISTS testspace;
+NOTICE:  tablespace "testspace" does not exist, skipping
+\! test -d /tmp/testspace || echo "* * * Can't test tablespaces unless you mkdir /tmp/testspace and chown it to the postgres user * * *"
+CREATE TABLESPACE testspace LOCATION '/tmp/testspace';
+SELECT save_floatfile('testspace', 'test', '{1,2,3,NULL,4,NULL}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT load_floatfile('testspace', 'test');
+   load_floatfile    
+---------------------
+ {1,2,3,NULL,4,NULL}
+(1 row)
+
+SELECT extend_floatfile('testspace', 'test', '{NULL,5}'::float[]);
+ extend_floatfile 
+------------------
+ 
+(1 row)
+
+SELECT load_floatfile('testspace', 'test');
+       load_floatfile       
+----------------------------
+ {1,2,3,NULL,4,NULL,NULL,5}
+(1 row)
+
+SELECT drop_floatfile('testspace', 'test');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+DROP TABLESPACE testspace;

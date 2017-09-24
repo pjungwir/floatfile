@@ -15,9 +15,14 @@
 #include <miscadmin.h>
 #include <utils/array.h>
 #include <utils/guc.h>
+#include <utils/acl.h>
 #include <utils/lsyscache.h>
-#include <catalog/pg_type.h>
 #include <utils/builtins.h>
+#include <catalog/pg_type.h>
+#include <catalog/catalog.h>
+#include <catalog/pg_tablespace.h>
+#include <commands/tablespace.h>
+
 
 PG_MODULE_MAGIC;
 
@@ -56,34 +61,50 @@ PG_MODULE_MAGIC;
 #define SAFE_TO_CAST_FLOATS_AND_DATUMS FLOAT8PASSBYVAL
 // #define SAFE_TO_CAST_FLOATS_AND_DATUMS false
 
-static void validate_target_filename(const char *filename);
-static void floatfile_root_path(const char *tablespace, char *path, int path_len);
-static int mkdirs_for_floatfile(const char *root, const char *path);
-static int floatfile_filename_to_full_path(const char *tablespace, const char *filename, char *path, int path_len);
-static int load_file_to_floats(const char *tablespace, const char *filename, float8** vals, bool** nulls);
-static int save_file_from_floats(const char *tablespace, const char *filename, float8* vals, bool* nulls, int array_len);
-static int extend_file_from_floats(const char *tablespace, const char *filename, float8* vals, bool* nulls, int array_len);
-static int32 hash_filename(const char *filename);
-
 
 
 static void floatfile_root_path(const char *tablespace, char *path, int path_len) {
   int chars_wrote;
   const char *root_directory;
+  Oid tablespace_oid;
+  char *tablespace_location;
 
+  // If tablespace is NULL then use the default tablespace:
   if (tablespace) {
-    // TODO tablespaces not supported yet
-    elog(ERROR, "Tablespaces not supported yet");
+    tablespace_oid = get_tablespace_oid(tablespace, false);
   } else {
-    // GetConfigOption returns a static buffer,
-    // but since you can't change data_directory without restarting the server,
-    // it is safe to use.
+    tablespace_oid = InvalidOid;  // Used by pg_tablespace_location to indicate the default tablespace.
+  }
+
+  // Permissions check: Follow the logic in DefineRelation
+  // from src/backend/commands/tablecmds.c:
+  if (OidIsValid(tablespace_oid) && tablespace_oid != MyDatabaseTableSpace) {
+    AclResult aclresult;
+    aclresult = pg_tablespace_aclcheck(tablespace_oid, GetUserId(), ACL_CREATE);
+    if (aclresult != ACLCHECK_OK) {
+      aclcheck_error(aclresult, ACL_KIND_TABLESPACE, get_tablespace_name(tablespace_oid));
+    }
+  }
+  if (tablespace_oid == GLOBALTABLESPACE_OID) {
+    ereport(ERROR,
+        (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+         errmsg("only shared relations can be placed in pg_global tablespace")));
+  }
+
+  tablespace_location = DatumGetCString(DirectFunctionCall1(textout,
+                          DirectFunctionCall1(pg_tablespace_location, ObjectIdGetDatum(tablespace_oid))));
+
+  if (strcmp(tablespace_location, "") == 0) {
     root_directory = GetConfigOption("data_directory", false, true);
     // Be a little paranoid:
     if (root_directory[0] != '/') elog(ERROR, "data_directory is not an absolute path");
     if (strlen(root_directory) < MINIMUM_SANE_DATA_DIR) elog(ERROR, "data_directory is too short");
 
     chars_wrote = snprintf(path, path_len, "%s", root_directory);
+    if (chars_wrote == -1 || chars_wrote >= path_len) elog(ERROR, "floatfile root path was too long");
+
+  } else {
+    chars_wrote = snprintf(path, path_len, "%s/%s", tablespace_location, TABLESPACE_VERSION_DIRECTORY);
     if (chars_wrote == -1 || chars_wrote >= path_len) elog(ERROR, "floatfile root path was too long");
   }
 }
@@ -215,6 +236,55 @@ bail:
 }
 
 
+
+/**
+ * Cleans up the container directories if necessary.
+ *
+ * Parameters:
+ *
+ * `root` - What not the delete.
+ * `path` - Start with the `basename` of this and keep deleting
+ *          until we get to `root` or can't remove something
+ *          because it has other files.
+ *
+ * We want to support all these use cases:
+ *
+ *  root      | path
+ * -----------|------------
+ *  $data_dir | floatfile/12345/foo.n
+ *  $data_dir | floatfile/12345/bar/foo.n
+ *  $data_dir | floatfile/12345/bar/baz/foo.n
+ *
+ * So we find the last `/` in `path` and delete all the dirs down.
+ */
+static int rmdirs_for_floatfile(const char *root, const char *path) {
+  char mypath[FLOATFILE_MAX_PATH + 1];
+  char *pos;
+  int rootfd;
+  int result;
+
+  rootfd = open(root, O_RDONLY);
+  if (rootfd == -1) return -1;
+
+  strncpy(mypath, path, FLOATFILE_MAX_PATH + 1);
+
+  while ((pos = strrchr(mypath, '/'))) {
+    *pos = '\0';
+    result = unlinkat(rootfd, mypath, AT_REMOVEDIR);
+    if (result == -1) {
+      if (errno == ENOTEMPTY) {
+        break;  // All done!
+      } else {
+        result = errno;
+        close(rootfd); // ignore error
+        errno = result;
+        return -1;
+      }
+    }
+  }
+
+  return close(rootfd);
+}
 
 /**
  * Makes the container directories if necessary.
@@ -425,21 +495,7 @@ static int32 hash_filename(const char *filename) {
 }
 
 
-
-Datum load_floatfile(PG_FUNCTION_ARGS);
-PG_FUNCTION_INFO_V1(load_floatfile);
-/**
- * load_floatfile - Loads an array of floats from a given file.
- *
- * Parameters:
- *
- *   `file` - the name of the file, relative to the data dir + our prefix.
- */
-Datum
-load_floatfile(PG_FUNCTION_ARGS)
-{
-  text *filename_arg;
-  char *filename;
+static ArrayType *_load_floatfile(const char *tablespace, const char *filename) {
   int32 filename_hash;
   bool *nulls;
   float8 *floats;
@@ -454,12 +510,6 @@ load_floatfile(PG_FUNCTION_ARGS)
   int lbs[1];
   int i;
 
-  if (PG_ARGISNULL(0)) PG_RETURN_NULL();
-  filename_arg = PG_GETARG_TEXT_P(0);
-
-  // TODO: DRY this up with the tablespace version:
-
-  filename = GET_STR(filename_arg);
   filename_hash = hash_filename(filename);
 
   // We use Postgres advisory locks instead of POSIX file locking
@@ -467,7 +517,7 @@ load_floatfile(PG_FUNCTION_ARGS)
   // they show up in pg_locks and we get free deadlock detection.
   DirectFunctionCall2(pg_advisory_lock_shared_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
 
-  arrlen = load_file_to_floats(NULL, filename, &floats, &nulls);
+  arrlen = load_file_to_floats(tablespace, filename, &floats, &nulls);
   if (arrlen < 0) {
     errstr = strerror(errno);
     goto quit;
@@ -493,8 +543,31 @@ load_floatfile(PG_FUNCTION_ARGS)
 quit:
   DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
   if (errstr) elog(ERROR, "%s", errstr);
+  return result;
+}
 
-  PG_RETURN_ARRAYTYPE_P(result);
+
+
+Datum load_floatfile(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(load_floatfile);
+/**
+ * load_floatfile - Loads an array of floats from a given file.
+ *
+ * Parameters:
+ *
+ *   `file` - the name of the file, relative to the data dir + our prefix.
+ */
+Datum
+load_floatfile(PG_FUNCTION_ARGS)
+{
+  text *filename_arg;
+  char *filename;
+
+  if (PG_ARGISNULL(0)) PG_RETURN_NULL();
+  filename_arg = PG_GETARG_TEXT_P(0);
+
+  filename = GET_STR(filename_arg);
+  PG_RETURN_ARRAYTYPE_P(_load_floatfile(NULL, filename));
 }
 
 
@@ -512,56 +585,42 @@ PG_FUNCTION_INFO_V1(load_floatfile_from_tablespace);
 Datum
 load_floatfile_from_tablespace(PG_FUNCTION_ARGS)
 {
-  // TODO
-  PG_RETURN_NULL();
+  text *tablespace_arg;
+  char *tablespace;
+  text *filename_arg;
+  char *filename;
+
+  if (PG_ARGISNULL(0)) {
+    tablespace = NULL;
+  } else {
+    tablespace_arg = PG_GETARG_TEXT_P(0);
+    tablespace = GET_STR(tablespace_arg);
+  }
+
+  if (PG_ARGISNULL(1)) PG_RETURN_NULL();
+  filename_arg = PG_GETARG_TEXT_P(1);
+  filename = GET_STR(filename_arg);
+
+  PG_RETURN_ARRAYTYPE_P(_load_floatfile(tablespace, filename));
 }
 
 
 
-Datum save_floatfile(PG_FUNCTION_ARGS);
-PG_FUNCTION_INFO_V1(save_floatfile);
-/**
- * save_floatfile - Saves an array of floats to a file in the data directory.
- *
- * Parameters:
- *   `filename` - The name of the file to use. Must not already exist!
- *   `vals` - The array of floats to save.
- *
- * Returns:
- *
- *   0 on success
- *   E TODO if the file already exists.
- *   any errors opening/writing/closing the file.
- */
-Datum
-save_floatfile(PG_FUNCTION_ARGS)
-{
-  text *filename_arg;
-  char *filename;
+static void _save_floatfile(const char *tablespace, const char *filename, ArrayType *vals) {
   int32 filename_hash;
   bool *nulls;
   float8 *floats;
   Datum* datums;
   int arrlen;
   char *errstr = NULL;
-  ArrayType *vals;
   Oid valsType;
   int16 floatTypeWidth;
   bool floatTypeByValue;
   char floatTypeAlignmentCode;
   int i;
 
-  if (PG_ARGISNULL(0)) PG_RETURN_VOID();
-  if (PG_ARGISNULL(1)) PG_RETURN_VOID();
-
-  filename_arg = PG_GETARG_TEXT_P(0);
-
-  // TODO: DRY this up with the tablespace version:
-
-  filename = GET_STR(filename_arg);
   filename_hash = hash_filename(filename);
 
-  vals = PG_GETARG_ARRAYTYPE_P(1);
   if (ARR_NDIM(vals) > 1) {
     ereport(ERROR, (errmsg("One-dimesional arrays are required")));
   }
@@ -584,7 +643,7 @@ save_floatfile(PG_FUNCTION_ARGS)
 
   DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
 
-  if (save_file_from_floats(NULL, filename, floats, nulls, arrlen)) {
+  if (save_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
     errstr = strerror(errno);
     goto quit;
   }
@@ -594,6 +653,33 @@ save_floatfile(PG_FUNCTION_ARGS)
 quit:
   DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
   if (errstr) elog(ERROR, "%s", errstr);
+}
+
+Datum save_floatfile(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(save_floatfile);
+/**
+ * save_floatfile - Saves an array of floats to a file in the data directory.
+ *
+ * Parameters:
+ *   `filename` - The name of the file to use. Must not already exist!
+ *   `vals` - The array of floats to save.
+ */
+Datum
+save_floatfile(PG_FUNCTION_ARGS)
+{
+  text *filename_arg;
+  char *filename;
+  ArrayType *vals;
+
+  if (PG_ARGISNULL(0)) PG_RETURN_VOID();
+  if (PG_ARGISNULL(1)) PG_RETURN_VOID();
+
+  filename_arg = PG_GETARG_TEXT_P(0);
+  filename = GET_STR(filename_arg);
+
+  vals = PG_GETARG_ARRAYTYPE_P(1);
+
+  _save_floatfile(NULL, filename, vals);
 
   PG_RETURN_VOID();
 }
@@ -604,51 +690,53 @@ Datum save_floatfile_in_tablespace(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(save_floatfile_in_tablespace);
 /**
  * save_floatfile_in_tablespace - Saves an array of floats to a file in the tablespace.
- * TODO
  */
 Datum
 save_floatfile_in_tablespace(PG_FUNCTION_ARGS)
 {
+  text *tablespace_arg;
+  char *tablespace;
+  text *filename_arg;
+  char *filename;
+  ArrayType *vals;
+
+  if (PG_ARGISNULL(1)) PG_RETURN_VOID();
+  if (PG_ARGISNULL(2)) PG_RETURN_VOID();
+
+  if (PG_ARGISNULL(0)) {
+    tablespace = NULL;
+  } else {
+    tablespace_arg = PG_GETARG_TEXT_P(0);
+    tablespace = GET_STR(tablespace_arg);
+  }
+
+  filename_arg = PG_GETARG_TEXT_P(1);
+  filename = GET_STR(filename_arg);
+
+  vals = PG_GETARG_ARRAYTYPE_P(2);
+
+  _save_floatfile(tablespace, filename, vals);
+
   PG_RETURN_VOID();
 }
 
 
 
-Datum extend_floatfile(PG_FUNCTION_ARGS);
-PG_FUNCTION_INFO_V1(extend_floatfile);
-/**
- * extend_floatfile - Appends to an existing floatfile file in the data directory.
- * TODO
- */
-Datum
-extend_floatfile(PG_FUNCTION_ARGS)
-{
-  text *filename_arg;
-  char *filename;
+static void _extend_floatfile(const char *tablespace, const char *filename, ArrayType *vals) {
   int32 filename_hash;
   bool *nulls;
   float8 *floats;
   Datum* datums;
   int arrlen;
   char *errstr = NULL;
-  ArrayType *vals;
   Oid valsType;
   int16 floatTypeWidth;
   bool floatTypeByValue;
   char floatTypeAlignmentCode;
   int i;
 
-  if (PG_ARGISNULL(0)) PG_RETURN_VOID();
-  if (PG_ARGISNULL(1)) PG_RETURN_VOID();
-
-  filename_arg = PG_GETARG_TEXT_P(0);
-
-  // TODO: DRY this up with the tablespace version, and maybe the save_ functions too:
-
-  filename = GET_STR(filename_arg);
   filename_hash = hash_filename(filename);
 
-  vals = PG_GETARG_ARRAYTYPE_P(1);
   if (ARR_NDIM(vals) > 1) {
     ereport(ERROR, (errmsg("One-dimesional arrays are required")));
   }
@@ -671,7 +759,7 @@ extend_floatfile(PG_FUNCTION_ARGS)
 
   DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
 
-  if (extend_file_from_floats(NULL, filename, floats, nulls, arrlen)) {
+  if (extend_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
     errstr = strerror(errno);
     goto quit;
   }
@@ -683,6 +771,30 @@ quit:
   DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
   if (errstr) elog(ERROR, "%s", errstr);
 
+}
+
+Datum extend_floatfile(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(extend_floatfile);
+/**
+ * extend_floatfile - Appends to an existing floatfile file in the data directory.
+ */
+Datum
+extend_floatfile(PG_FUNCTION_ARGS)
+{
+  text *filename_arg;
+  char *filename;
+  ArrayType *vals;
+
+  if (PG_ARGISNULL(0)) PG_RETURN_VOID();
+  if (PG_ARGISNULL(1)) PG_RETURN_VOID();
+
+  filename_arg = PG_GETARG_TEXT_P(0);
+  filename = GET_STR(filename_arg);
+
+  vals = PG_GETARG_ARRAYTYPE_P(1);
+
+  _extend_floatfile(NULL, filename, vals);
+
   PG_RETURN_VOID();
 }
 
@@ -692,9 +804,128 @@ Datum extend_floatfile_in_tablespace(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(extend_floatfile_in_tablespace);
 /**
  * extend_floatfile_in_tablespace - Appends to an existing floatfile file in the tablespace.
- * TODO
  */
 Datum
 extend_floatfile_in_tablespace(PG_FUNCTION_ARGS) {
+  text *tablespace_arg;
+  char *tablespace;
+  text *filename_arg;
+  char *filename;
+  ArrayType *vals;
+
+  if (PG_ARGISNULL(1)) PG_RETURN_VOID();
+  if (PG_ARGISNULL(2)) PG_RETURN_VOID();
+
+  if (PG_ARGISNULL(0)) {
+    tablespace = NULL;
+  } else {
+    tablespace_arg = PG_GETARG_TEXT_P(0);
+    tablespace = GET_STR(tablespace_arg);
+  }
+
+  filename_arg = PG_GETARG_TEXT_P(1);
+  filename = GET_STR(filename_arg);
+
+  vals = PG_GETARG_ARRAYTYPE_P(2);
+
+  _extend_floatfile(tablespace, filename, vals);
+
+  PG_RETURN_VOID();
+}
+
+
+
+static int _drop_floatfile(const char *tablespace, const char *filename) {
+  char root_directory[FLOATFILE_MAX_PATH + 1],
+       relative_target[FLOATFILE_MAX_PATH + 1],
+       path[FLOATFILE_MAX_PATH + 1];
+  int pathlen;
+  int32 filename_hash;
+  char *errstr = NULL;
+
+  filename_hash = hash_filename(filename);
+
+  DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
+
+  validate_target_filename(filename);
+  pathlen = floatfile_filename_to_full_path(tablespace, filename, path, FLOATFILE_MAX_PATH + 1);
+
+  if (unlink(path)) return -1;
+
+  path[pathlen - 1] = FLOATFILE_FLOATS_SUFFIX;
+  if (unlink(path)) return -1;
+
+  // If that was the last file, remove the floatfile dir too
+  // so users can drop the tablespace:
+
+  floatfile_root_path(tablespace, root_directory, FLOATFILE_MAX_PATH + 1);
+  floatfile_relative_target_path(filename, relative_target, FLOATFILE_MAX_PATH + 1);
+  if (rmdirs_for_floatfile(root_directory, relative_target)) {
+    errstr = strerror(errno);
+    goto quit;
+  }
+
+quit:
+  DirectFunctionCall2(pg_advisory_unlock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
+  if (errstr) elog(ERROR, "%s", errstr);
+  return EXIT_SUCCESS;
+}
+
+Datum drop_floatfile(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(drop_floatfile);
+/**
+ * drop_floatfile - Deletes the files used by this floatfile.
+ *
+ * Parameters:
+ *   `filename` - The name of the file to use. Must not already exist!
+ */
+Datum
+drop_floatfile(PG_FUNCTION_ARGS)
+{
+  text *filename_arg;
+  char *filename;
+
+  if (PG_ARGISNULL(0)) PG_RETURN_VOID();
+
+  filename_arg = PG_GETARG_TEXT_P(0);
+  filename = GET_STR(filename_arg);
+
+  _drop_floatfile(NULL, filename);
+
+  PG_RETURN_VOID();
+}
+
+
+
+Datum drop_floatfile_in_tablespace(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(drop_floatfile_in_tablespace);
+/**
+ * drop_floatfile_in_tablespace - Deletes the files used by this floatfile.
+ *
+ * Parameters:
+ *   `filename` - The name of the file to use. Must not already exist!
+ */
+Datum
+drop_floatfile_in_tablespace(PG_FUNCTION_ARGS)
+{
+  text *tablespace_arg;
+  char *tablespace;
+  text *filename_arg;
+  char *filename;
+
+  if (PG_ARGISNULL(1)) PG_RETURN_VOID();
+
+  if (PG_ARGISNULL(0)) {
+    tablespace = NULL;
+  } else {
+    tablespace_arg = PG_GETARG_TEXT_P(0);
+    tablespace = GET_STR(tablespace_arg);
+  }
+
+  filename_arg = PG_GETARG_TEXT_P(1);
+  filename = GET_STR(filename_arg);
+
+  _drop_floatfile(tablespace, filename);
+
   PG_RETURN_VOID();
 }
