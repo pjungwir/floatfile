@@ -7,12 +7,18 @@ providing very fast querying (especially when combined with
 [`aggs_for_vecs`](https://github.com/pjungwir/aggs_for_vecs),
 or [`floatvec`](https://github.com/pjungwir/floatvec))
 without paying a huge cost to keep updating them.
+The idea is that if you have 1 million `FLOAT`s,
+it is much faster if you can load them as a single 8 MB chunk
+rather than pulling from a million different places on disk.
+Sometimes you can just store your data as an array in a regular Postgres table,
+but [updating those arrays will be slow and cause painful MVCC churn](http://www.postgresql-archive.org/Performance-appending-to-an-array-column-td5984739.html). 
+Since this extension keeps the data in a separate file, appends are very fast and outside the MVCC system.
 
 This extension offers several functions:
 
 `save_floatfile(filename TEXT, vals FLOAT[])` - Saves an array to a new file.
 
-This creates a new file inside your Postgres data directory with the values of the array you provide. (Technically it is two files: one for the floats and one for the nulls.) If either `filename` or `vals` is `NULL` then this does nothing. If `vals` has some `NULL` elements, they will be remembered.
+This creates a new file inside your Postgres default tablespace with the values of the array you provide. (Technically it is two files: one for the floats and one for the nulls.) If either `filename` or `vals` is `NULL` then this does nothing. If `vals` has some `NULL` elements, they will be remembered.
 
 If `filename` already exists, this function will fail.
 
@@ -125,7 +131,11 @@ TODO
 
 - Better durability as described above: separate file with the length of the array. Also fsync.
 
-- Any hooks in `DROP DATABASE` so we can clean up files when it happens?
+- See if there are any performance gains from using compression like a typical column-store database.
+  Maybe even make it an option so people can compare results themselves.
+
+- Any hooks in `DROP DATABASE` so we can clean up files when it happens? Yes, make it an FDW or use the [`ProcessUtility_hook`](http://paquier.xyz/postgresql-2/hooks-in-postgres-super-superuser-restrictions/).
+
 
 Author
 ------

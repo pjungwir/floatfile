@@ -53,7 +53,7 @@ PG_MODULE_MAGIC;
 // to load an array with 13 million elements
 // (from 150ms to 450ms).
 // This is a bit of hack from the sound of
-// https://mailinglist-archive.mojah.be/pgsql-general/2017-09/msg00453.php
+// http://www.postgresql-archive.org/Is-float8-a-reference-type-td5984977.html
 // but it works for Linux and Mac on x86,
 // and should work anywhere as far as I can tell.
 // I suppose if there are ever 16-byte-wide Datums
@@ -198,6 +198,8 @@ static int load_file_to_floats(const char *tablespace, const char *filename, flo
   // palloc never returns NULL but calls elog to fail
   
   // TODO: Is mmap any faster? Anything else? Benchmark it for Mac and Linux!
+  // TODO: Should test this on large files,
+  // and maybe cap the buffer at something reasonable.
   bytes_read = read(fd, *nulls, fileinfo.st_size);
   if (bytes_read != fileinfo.st_size) goto bail;
 
@@ -242,7 +244,7 @@ bail:
  *
  * Parameters:
  *
- * `root` - What not the delete.
+ * `root` - What not to delete.
  * `path` - Start with the `basename` of this and keep deleting
  *          until we get to `root` or can't remove something
  *          because it has other files.
@@ -567,7 +569,7 @@ PG_FUNCTION_INFO_V1(load_floatfile);
  *
  * Parameters:
  *
- *   `file` - the name of the file, relative to the data dir + our prefix.
+ *   `file` - the name of the file, relative to the default tablespace + our prefix.
  */
 Datum
 load_floatfile(PG_FUNCTION_ARGS)
