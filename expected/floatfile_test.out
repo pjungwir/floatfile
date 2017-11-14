@@ -156,3 +156,22 @@ AND     locktype = 'advisory';
 ---------+-------
 (0 rows)
 
+-- Histogram tests:
+SELECT save_floatfile('a', '{1,1,1,1,NULL}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT save_floatfile('b', '{1,1,0,NULL,1}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT floatfile_to_hist2d('a', 'b', 0::float, 0::float, 1::float, 1::float, 5, 2);
+       floatfile_to_hist2d       
+---------------------------------
+ {{0,0},{1,2},{0,0},{0,0},{0,0}}
+(1 row)
+

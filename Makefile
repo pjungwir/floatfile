@@ -1,6 +1,6 @@
 MODULES = floatfile
 EXTENSION = floatfile
-EXTENSION_VERSION = 1.0.0
+EXTENSION_VERSION = 1.1.0
 DATA = $(EXTENSION)--$(EXTENSION_VERSION).sql
 REGRESS = $(EXTENSION)_test
 
@@ -14,5 +14,5 @@ README.html: README.md
 release:
 	git archive --format zip --prefix=$(EXTENSION)-$(EXTENSION_VERSION)/ --output $(EXTENSION)-$(EXTENSION_VERSION).zip master
 
-.PHONY: test release
+.PHONY: release
 

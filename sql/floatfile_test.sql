@@ -62,3 +62,9 @@ SELECT  classid, objid
 FROM    pg_locks
 WHERE   database = (SELECT oid FROM pg_database WHERE datname = current_database())
 AND     locktype = 'advisory';
+
+-- Histogram tests:
+
+SELECT save_floatfile('a', '{1,1,1,1,NULL}'::float[]);
+SELECT save_floatfile('b', '{1,1,0,NULL,1}'::float[]);
+SELECT floatfile_to_hist2d('a', 'b', 0::float, 0::float, 1::float, 1::float, 5, 2);

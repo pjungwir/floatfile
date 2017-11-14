@@ -43,6 +43,20 @@ PG_MODULE_MAGIC;
 #define MINIMUM_SANE_DATA_DIR 3
 #endif
 
+#define min(a,b) \
+   ({ __typeof__ (a) _a = (a); \
+       __typeof__ (b) _b = (b); \
+     _a > _b ? _a : _b; })
+
+// macOS has a max stack frame of 8MB:
+// If this were an executable we could use
+//
+//     LDFLAGS=-Wl,-stack_size,1000000
+//
+// but that won't work when building an .so.
+// #define HIST_BUFFER 1024*1024
+#define HIST_BUFFER 512*512
+
 // Datums can be eight or four bytes wide, depending on the machine.
 // If they are eight wide, then float8s are pass-by-value.
 // In that case an array of float8s and an array of Datums
@@ -947,4 +961,158 @@ drop_floatfile_in_tablespace(PG_FUNCTION_ARGS)
   _drop_floatfile(tablespace, filename);
 
   PG_RETURN_VOID();
+}
+
+
+static int open_floatfile_for_reading(char *tablespace, char *filename, int *vals_fd, int *nulls_fd) {
+  char path[FLOATFILE_MAX_PATH + 1];
+  int pathlen;
+
+  validate_target_filename(filename);
+  pathlen = floatfile_filename_to_full_path(tablespace, filename, path, FLOATFILE_MAX_PATH + 1);
+
+  *nulls_fd = open(path, O_RDONLY);
+  if (*nulls_fd == -1) return -1;
+
+  path[pathlen - 1] = FLOATFILE_FLOATS_SUFFIX;
+  *vals_fd = open(path, O_RDONLY);
+  if (*vals_fd == -1) {
+    close(*nulls_fd);
+    return -1;
+  }
+
+  return 0;
+}
+
+Datum floatfile_to_hist2d(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(floatfile_to_hist2d);
+/**
+ * floatfile_to_hist2d - Uses two floatfiles to build a 2d histogram.
+ */
+Datum
+floatfile_to_hist2d(PG_FUNCTION_ARGS)
+{
+  // TODO: float4 instead of float8??
+  size_t i;
+  char *xs_filename;
+  char *ys_filename;
+  int32 xs_filename_hash, ys_filename_hash;
+  int x_fd, x_nulls_fd, y_fd, y_nulls_fd;
+  float8 xs[HIST_BUFFER];
+  float8 ys[HIST_BUFFER];
+  bool x_nulls[HIST_BUFFER];
+  bool y_nulls[HIST_BUFFER];
+  float8 x_min, y_min, x_width, y_width;
+  int32 x_count, y_count;
+  // Make sure `counts` has the same width as Datum
+  // so we can avoid a memcpy:
+#ifdef SAFE_TO_CAST_FLOATS_AND_DATUMS
+  int64 *counts;
+#else
+  int32 *counts;
+#endif
+  float8 x, y;
+  int x_pos, y_pos;
+  ssize_t more_xs, more_ys, more_min;
+  char *errstr = NULL;
+  Datum *histContent;
+  int arrayLength;
+  ArrayType *histVals;
+  int16 histTypeWidth;
+  bool histTypeByValue;
+  char histTypeAlignmentCode;
+  bool *histNulls;
+  int dims[2];
+  int lbs[2];     // Lower Bounds of each dimension
+
+  if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2) || PG_ARGISNULL(3) ||
+      PG_ARGISNULL(4) || PG_ARGISNULL(5) || PG_ARGISNULL(6) || PG_ARGISNULL(7)) {
+    PG_RETURN_NULL();
+  }
+
+  xs_filename = GET_STR(PG_GETARG_TEXT_P(0));
+  ys_filename = GET_STR(PG_GETARG_TEXT_P(1));
+
+  x_min = PG_GETARG_FLOAT8(2);
+  y_min = PG_GETARG_FLOAT8(3);
+  x_width = PG_GETARG_FLOAT8(4);
+  y_width = PG_GETARG_FLOAT8(5);
+  x_count = PG_GETARG_INT32(6);
+  y_count = PG_GETARG_INT32(7);
+
+  xs_filename_hash = hash_filename(xs_filename);
+  ys_filename_hash = hash_filename(ys_filename);
+  // TODO: Should go from least to greatest to avoid deadlocks:
+  DirectFunctionCall2(pg_advisory_lock_shared_int4, FLOATFILE_LOCK_PREFIX, xs_filename_hash);
+  DirectFunctionCall2(pg_advisory_lock_shared_int4, FLOATFILE_LOCK_PREFIX, ys_filename_hash);
+
+  if (open_floatfile_for_reading(NULL, xs_filename, &x_fd, &x_nulls_fd) == -1) {
+    errstr = strerror(errno);
+    goto bail;
+  }
+  if (open_floatfile_for_reading(NULL, ys_filename, &y_fd, &y_nulls_fd) == -1) {
+    errstr = strerror(errno);
+    goto bail;
+  }
+
+  arrayLength = x_count * y_count;
+  counts = palloc0(sizeof(counts[0]) * arrayLength);
+  histNulls = palloc0(sizeof(bool) * arrayLength);
+
+  // TODO: loop unrolling?
+  // TODO: Could I make this faster with async reads,
+  // so I can compute while more data is loading?
+  while ((more_xs = read(x_fd, xs, HIST_BUFFER*sizeof(float8)))) {
+    if (more_xs == -1) {
+      errstr = strerror(errno);
+      goto bail;
+    }
+    more_xs /= sizeof(float8);
+    if (read(x_nulls_fd, x_nulls, HIST_BUFFER*sizeof(bool))/sizeof(bool) != more_xs) {
+      errstr = "x nulls don't equal x vals";
+      goto bail;
+    }
+
+    more_ys = read(y_fd, ys, HIST_BUFFER*sizeof(float8));
+    if (more_ys == -1) {
+      errstr = strerror(errno);
+      goto bail;
+    }
+    if (more_ys == 0) break;
+    more_ys /= sizeof(float8);
+    if (read(y_nulls_fd, y_nulls, HIST_BUFFER*sizeof(bool))/sizeof(bool) != more_ys) {
+      errstr = "y nulls don't equal y vals";
+      goto bail;
+    }
+
+    more_min = min(more_xs, more_ys);
+    for (i = 0; i < more_min; i += 1) {
+      if (x_nulls[i] || y_nulls[i]) continue;
+      x = xs[i];
+      y = ys[i];
+      // ereport(NOTICE, (errmsg("%d: %lf x %lf", i, x, y)));
+
+      x_pos = (x - x_min) / x_width;
+      y_pos = (y - y_min) / y_width;
+
+      if (x_pos >= 0 && x_pos < x_count && y_pos >= 0 && y_pos < y_count) {
+        counts[x_pos * y_count + y_pos] += 1;
+      }
+    }
+  }
+
+bail:
+  DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, xs_filename_hash);
+  DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, ys_filename_hash);
+  if (errstr) elog(ERROR, "%s", errstr);
+
+  // Wrap the buckets in a new PostgreSQL array object.
+  histContent = (Datum*)counts;   // safe because int32 is always pass-by-value.
+  lbs[0] = 1;
+  lbs[1] = 1;
+  dims[0] = x_count;
+  dims[1] = y_count;
+  get_typlenbyvalalign(INT4OID, &histTypeWidth, &histTypeByValue, &histTypeAlignmentCode);
+  histVals = construct_md_array(histContent, histNulls, 2, dims, lbs, INT4OID, histTypeWidth, histTypeByValue, histTypeAlignmentCode);
+  PG_RETURN_ARRAYTYPE_P(histVals);
 }

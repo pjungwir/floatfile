@@ -1,4 +1,4 @@
 comment = 'Simple file storage for arrays of floats'
-default_version = '1.0.0'
+default_version = '1.1.0'
 module_pathname = '$libdir/floatfile'
 relocatable = true
