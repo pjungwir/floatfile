@@ -14,6 +14,9 @@ include $(PGXS)
 
 bencher: hist2d.o bencher.o
 
+bench: bencher
+	./bencher 2>&1 | grep counting | cut -d ' ' -f 3 | awk '{total += $$1 } END { print total/NR }'
+
 README.html: README.md
 	jq --slurp --raw-input '{"text": "\(.)", "mode": "markdown"}' < README.md | curl --data @- https://api.github.com/markdown > README.html
 
