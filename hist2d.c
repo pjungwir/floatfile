@@ -12,6 +12,7 @@
 #include <sys/uio.h>
 #include <unistd.h>
 #include <string.h>
+#include <time.h>
 
 #include <postgres.h>
 #include <catalog/pg_type.h>
@@ -114,7 +115,15 @@ int build_histogram(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int3
   bool x_nulls[HIST_BUFFER];
   bool y_nulls[HIST_BUFFER];
   int already_read = 0, x_vals_read, y_vals_read;
+#ifdef PROFILING
+  struct timespec last_tp, tp;
+  long elapsed;
+#endif
 
+#ifdef PROFILING
+  fprintf(stderr, "another run\n");
+  if (clock_gettime(CLOCK_MONOTONIC, &last_tp)) { perror("clock failed"); exit(1); }
+#endif
   while ((x_vals_read = load_dimension(already_read, x_fd, x_nulls_fd, xs, x_nulls, errstr))) {
     if (x_vals_read == -1) return -1;   // errstr is already set
 
@@ -124,10 +133,22 @@ int build_histogram(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int3
       *errstr = "read unequals xs and ys";
       return -1;
     }
+#ifdef PROFILING
+    if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
+    elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);
+    fprintf(stderr, "reading files: %ld ns\n", elapsed);
+    last_tp = tp;
+#endif
 
     already_read += x_vals_read;
 
     count_vals(x_vals_read, counts, xs, x_nulls, x_min, x_width, x_count, ys, y_nulls, y_min, y_width, y_count);
+#ifdef PROFILING
+    if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
+    elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);
+    fprintf(stderr, "counting vals: %ld ns\n", elapsed);
+    last_tp = tp;
+#endif
   }
 
   return 0;
