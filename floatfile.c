@@ -97,7 +97,9 @@ static void floatfile_root_path(const char *tablespace, char *path, int path_len
                           DirectFunctionCall1(pg_tablespace_location, ObjectIdGetDatum(tablespace_oid))));
 
   if (strcmp(tablespace_location, "") == 0) {
-    root_directory = GetConfigOption("data_directory", false, true);
+    // We set restrict_superuser to false here
+    // because we aren't going to share the location with the user:
+    root_directory = GetConfigOption("data_directory", false, false);
     // Be a little paranoid:
     if (root_directory[0] != '/') elog(ERROR, "data_directory is not an absolute path");
     if (strlen(root_directory) < MINIMUM_SANE_DATA_DIR) elog(ERROR, "data_directory is too short");
