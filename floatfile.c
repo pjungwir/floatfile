@@ -374,7 +374,7 @@ static int save_file_from_floats(const char *tablespace, const char *filename, f
   bytes_written = write(fd, nulls, array_len * sizeof(bool));
   if (bytes_written != array_len * sizeof(bool)) goto bail;
 
-  // TODO: fsync before closing?
+  if (fsync(fd)) return -1;
   if (close(fd)) return -1;
 
 
@@ -387,6 +387,7 @@ static int save_file_from_floats(const char *tablespace, const char *filename, f
   bytes_written = write(fd, vals, array_len * sizeof(float8));
   if (bytes_written != array_len * sizeof(float8)) goto bail;
 
+  if (fsync(fd)) return -1;
   if (close(fd)) return -1;
 
   return EXIT_SUCCESS;
@@ -433,6 +434,7 @@ static int extend_file_from_floats(const char *tablespace, const char *filename,
   bytes_written = write(fd, nulls, array_len * sizeof(bool));
   if (bytes_written != array_len * sizeof(bool)) goto bail;
 
+  if (fsync(fd)) return -1;
   if (close(fd)) return -1;
 
 
@@ -445,6 +447,7 @@ static int extend_file_from_floats(const char *tablespace, const char *filename,
   bytes_written = write(fd, vals, array_len * sizeof(float8));
   if (bytes_written != array_len * sizeof(float8)) goto bail;
 
+  if (fsync(fd)) return -1;
   if (close(fd)) return -1;
 
   return EXIT_SUCCESS;
