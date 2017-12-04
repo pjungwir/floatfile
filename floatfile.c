@@ -1056,7 +1056,7 @@ bail:
   if (errstr) elog(ERROR, "%s", errstr);
 
   // Wrap the buckets in a new PostgreSQL array object.
-  histContent = (Datum*)counts;   // safe because int32 is always pass-by-value.
+  histContent = (Datum*)counts;   // safe as long as counts is int64. TODO support 32-bit systems
   lbs[0] = 1;
   lbs[1] = 1;
   dims[0] = x_count;

@@ -89,19 +89,18 @@ static int load_dimension(int already_read, int vals_fd, int nulls_fd, float8 *v
 static void count_vals(int more_vals, int64 *counts, float8 *xs, bool *x_nulls, float8 x_min, float8 x_width, int x_count, float8 *ys, bool *y_nulls, float8 y_min, float8 y_width, int y_count) {
   size_t i;
   float8 x, y;
-  int x_pos, y_pos;
+  float8 x_pos, y_pos;
 
   for (i = 0; i < more_vals; i += 1) {
     if (x_nulls[i] || y_nulls[i]) continue;
     x = xs[i];
     y = ys[i];
-    // ereport(NOTICE, (errmsg("%d: %lf x %lf", i, x, y)));
 
     x_pos = (x - x_min) / x_width;
     y_pos = (y - y_min) / y_width;
 
     if (x_pos >= 0 && x_pos < x_count && y_pos >= 0 && y_pos < y_count) {
-      counts[x_pos * y_count + y_pos] += 1;
+      counts[(int)x_pos * y_count + (int)y_pos] += 1;
     }
   }
 }
