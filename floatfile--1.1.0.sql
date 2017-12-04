@@ -58,3 +58,9 @@ drop_floatfile(text, text)
 RETURNS void
 AS 'floatfile', 'drop_floatfile_in_tablespace'
 LANGUAGE c VOLATILE;
+
+CREATE OR REPLACE FUNCTION
+floatfile_to_hist2d(text, text, text, text, float, float, float, float, int, int)
+RETURNS int[]
+AS 'floatfile', 'floatfile_in_tablespace_to_hist2d'
+LANGUAGE c VOLATILE;
