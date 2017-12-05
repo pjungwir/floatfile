@@ -1050,9 +1050,9 @@ floatfile_to_hist2d(PG_FUNCTION_ARGS)
                   counts, &errstr);
 
 bail:
-  if (x_fd && close(x_fd)) errstr = "Can't close x_fd";
+  if (x_fd       && close(x_fd))       errstr = "Can't close x_fd";
   if (x_nulls_fd && close(x_nulls_fd)) errstr = "Can't close x_nulls_fd";
-  if (y_fd && close(y_fd)) errstr = "Can't close y_fd";
+  if (y_fd       && close(y_fd))       errstr = "Can't close y_fd";
   if (y_nulls_fd && close(y_nulls_fd)) errstr = "Can't close y_nulls_fd";
   DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, xs_filename_hash);
   DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, ys_filename_hash);
@@ -1078,9 +1078,9 @@ Datum
 floatfile_in_tablespace_to_hist2d(PG_FUNCTION_ARGS)
 {
   // TODO: float4 instead of float8??
-  char *xs_tablespace;
+  char *xs_tablespace = NULL;
   char *xs_filename;
-  char *ys_tablespace;
+  char *ys_tablespace = NULL;
   char *ys_filename;
   int32 xs_filename_hash, ys_filename_hash;
   int x_fd = 0, x_nulls_fd = 0, y_fd = 0, y_nulls_fd = 0;
@@ -1104,14 +1104,15 @@ floatfile_in_tablespace_to_hist2d(PG_FUNCTION_ARGS)
   int dims[2];
   int lbs[2];     // Lower Bounds of each dimension
 
-  if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2) || PG_ARGISNULL(3) || PG_ARGISNULL(4) ||
-      PG_ARGISNULL(5) || PG_ARGISNULL(6) || PG_ARGISNULL(7) || PG_ARGISNULL(8) || PG_ARGISNULL(9)) {
+  if (PG_ARGISNULL(1) || PG_ARGISNULL(3) ||
+      PG_ARGISNULL(4) || PG_ARGISNULL(5) || PG_ARGISNULL(6) ||
+      PG_ARGISNULL(7) || PG_ARGISNULL(8) || PG_ARGISNULL(9)) {
     PG_RETURN_NULL();
   }
 
-  xs_tablespace = GET_STR(PG_GETARG_TEXT_P(0));
+  if (!PG_ARGISNULL(0)) xs_tablespace = GET_STR(PG_GETARG_TEXT_P(0));
   xs_filename = GET_STR(PG_GETARG_TEXT_P(1));
-  ys_tablespace = GET_STR(PG_GETARG_TEXT_P(2));
+  if (!PG_ARGISNULL(2)) ys_tablespace = GET_STR(PG_GETARG_TEXT_P(2));
   ys_filename = GET_STR(PG_GETARG_TEXT_P(3));
 
   x_min = PG_GETARG_FLOAT8(4);
@@ -1146,9 +1147,9 @@ floatfile_in_tablespace_to_hist2d(PG_FUNCTION_ARGS)
                   counts, &errstr);
 
 bail:
-  if (x_fd && close(x_fd)) errstr = "Can't close x_fd";
+  if (x_fd       && close(x_fd))       errstr = "Can't close x_fd";
   if (x_nulls_fd && close(x_nulls_fd)) errstr = "Can't close x_nulls_fd";
-  if (y_fd && close(y_fd)) errstr = "Can't close y_fd";
+  if (y_fd       && close(y_fd))       errstr = "Can't close y_fd";
   if (y_nulls_fd && close(y_nulls_fd)) errstr = "Can't close y_nulls_fd";
   DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, xs_filename_hash);
   DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, ys_filename_hash);

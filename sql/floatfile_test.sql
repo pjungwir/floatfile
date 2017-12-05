@@ -93,4 +93,10 @@ SELECT floatfile_to_hist2d('testspace', 'a', 'testspace', 'b', -0.115::float, 0.
 SELECT drop_floatfile('testspace', 'a');
 SELECT drop_floatfile('testspace', 'b');
 
+SELECT save_floatfile(NULL, 'a', '{1,1}'::float[]);
+SELECT save_floatfile(NULL, 'b', '{1,2}'::float[]);
+SELECT floatfile_to_hist2d(NULL, 'a', NULL, 'b', -0.115::float, 0.944444::float, 0.23::float, 0.111111::float, 10, 10);
+SELECT drop_floatfile(NULL, 'a');
+SELECT drop_floatfile(NULL, 'b');
+
 DROP TABLESPACE testspace;
