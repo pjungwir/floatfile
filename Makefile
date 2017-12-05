@@ -1,6 +1,6 @@
 MODULE_big = floatfile
 EXTENSION = floatfile
-EXTENSION_VERSION = 1.1.0
+EXTENSION_VERSION = 1.1.1
 DATA = $(EXTENSION)--$(EXTENSION_VERSION).sql
 REGRESS = $(EXTENSION)_test
 OBJS = floatfile.o hist2d.o $(WIN32RES)
