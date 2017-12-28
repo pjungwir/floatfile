@@ -66,6 +66,34 @@ AND     locktype = 'advisory';
 -- Histogram tests:
 
 SELECT save_floatfile('a', '{1,1,1,1,NULL}'::float[]);
+SELECT floatfile_to_hist('a', 0::float, 1::float, 5);
+SELECT drop_floatfile('a');
+
+SELECT save_floatfile('a', '{1,1}'::float[]);
+SELECT floatfile_to_hist('a', -0.115::float, 0.23::float, 10);
+SELECT drop_floatfile('a');
+
+-- Histogram with tablespace tests:
+
+CREATE TABLESPACE testspace LOCATION '/tmp/testspace';
+
+SELECT save_floatfile('testspace', 'a', '{1,1,1,1,NULL}'::float[]);
+SELECT floatfile_to_hist('testspace', 'a', 0::float, 1::float, 5);
+SELECT drop_floatfile('testspace', 'a');
+
+SELECT save_floatfile('testspace', 'a', '{1,1}'::float[]);
+SELECT floatfile_to_hist('testspace', 'a', -0.115::float, 0.23::float, 10);
+SELECT drop_floatfile('testspace', 'a');
+
+SELECT save_floatfile(NULL, 'a', '{1,1}'::float[]);
+SELECT floatfile_to_hist(NULL, 'a', -0.115::float, 0.23::float, 10);
+SELECT drop_floatfile(NULL, 'a');
+
+DROP TABLESPACE testspace;
+
+-- 2D Histogram tests:
+
+SELECT save_floatfile('a', '{1,1,1,1,NULL}'::float[]);
 SELECT save_floatfile('b', '{1,1,0,NULL,1}'::float[]);
 SELECT floatfile_to_hist2d('a', 'b', 0::float, 0::float, 1::float, 1::float, 5, 2);
 SELECT drop_floatfile('a');
@@ -77,13 +105,13 @@ SELECT floatfile_to_hist2d('a', 'b', -0.115::float, 0.944444::float, 0.23::float
 SELECT drop_floatfile('a');
 SELECT drop_floatfile('b');
 
--- Histogram with tablespace tests:
+-- 2D histogram with tablespace tests:
 
 CREATE TABLESPACE testspace LOCATION '/tmp/testspace';
 
 SELECT save_floatfile('testspace', 'a', '{1,1,1,1,NULL}'::float[]);
 SELECT save_floatfile('testspace', 'b', '{1,1,0,NULL,1}'::float[]);
-SELECT floatfile_to_hist2d('testspace', 'a','testspace',  'b', 0::float, 0::float, 1::float, 1::float, 5, 2);
+SELECT floatfile_to_hist2d('testspace', 'a', 'testspace', 'b', 0::float, 0::float, 1::float, 1::float, 5, 2);
 SELECT drop_floatfile('testspace', 'a');
 SELECT drop_floatfile('testspace', 'b');
 

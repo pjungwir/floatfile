@@ -41,6 +41,17 @@ In addition there are tablespace versions of these functions so you can put the 
 Note in all cases `tablespace` should be the *name* of the tablespace, not its location on disk.
 If it is `NULL` then the default tablespace is used (normally the data directory).
 
+Finally there are some functions to compute results directly from the floatfile,
+since a Postgres array can only be 1GB max:
+
+`floatfile_to_hist(filename TEXT, buckets_start FLOAT, bucket_with FLOAT, bucket_count INT)` - Returns an array of integers with the counts of the histogram.
+
+`floatfile_to_hist(tablespace TEXT, filename TEXT, buckets_start FLOAT, bucket_with FLOAT, bucket_count INT)` - Returns an array of integers with the counts of the histogram.
+
+`floatfile_to_hist2d(xs_filename TEXT, ys_filename TEXT, x_buckets_start FLOAT, y_buckets_start FLOAT, x_bucket_with FLOAT, y_bucket_width, x_bucket_count INT, y_bucket_count)` - Returns a 2-d array of integers with the counts of the histogram.
+
+`floatfile_to_hist2d(xs_tablespace TEXT, xs_filename TEXT, ys_tablespace TEXT, ys_filename TEXT, x_buckets_start FLOAT, y_buckets_start FLOAT, x_bucket_with FLOAT, y_bucket_width, x_bucket_count INT, y_bucket_count)` - Returns a 2-d array of integers with the counts of the histogram.
+
 All these functions use [Postgres advisory locks](https://www.postgresql.org/docs/current/static/explicit-locking.html#ADVISORY-LOCKS). `load_floatfile` takes a shared lock, and `save`, `extend`, and `drop` take an exclusive one. They use [the two-arg versions of the functions](https://www.postgresql.org/docs/current/static/functions-admin.html#FUNCTIONS-ADVISORY-LOCKS), using `0xF107F11E` for the first arg and the [djb2 hash of the user-provided filename](http://www.cse.yorku.ca/~oz/hash.html) for the second one. (See the source code comments for my thoughts on birthday collisions.) You can change the value of the first arg by compiling with a different `FLOATFILE_LOCK_PREFIX`.
 If you really can't stand that this uses advisory locks at all,
 then I could probably add a compile-time option to use POSIX file locking instead,

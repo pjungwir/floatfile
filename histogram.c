@@ -1,5 +1,5 @@
 /**
- * hist2d.c - We want to keep most of the work
+ * histogram.c - We want to keep most of the work
  * in a separately-compilable unit
  * with no Postgres dependencies
  * so that we can more easily test and profile it.
@@ -17,7 +17,7 @@
 #include <postgres.h>
 #include <catalog/pg_type.h>
 
-#include "hist2d.h"
+#include "histogram.h"
 
 #define min(a,b) \
    ({ __typeof__ (a) _a = (a); \
@@ -86,7 +86,24 @@ static int load_dimension(int already_read, int vals_fd, int nulls_fd, float8 *v
   return vals_read;
 }
 
-static void count_vals(int more_vals, int64 *counts, float8 *xs, bool *x_nulls, float8 x_min, float8 x_width, int x_count, float8 *ys, bool *y_nulls, float8 y_min, float8 y_width, int y_count) {
+static void count_vals(int more_vals, int64 *counts, float8 *xs, bool *x_nulls, float8 x_min, float8 x_width, int x_count) {
+  size_t i;
+  float8 x;
+  float8 x_pos;
+
+  for (i = 0; i < more_vals; i += 1) {
+    if (x_nulls[i]) continue;
+    x = xs[i];
+
+    x_pos = (x - x_min) / x_width;
+
+    if (x_pos >= 0 && x_pos < x_count) {
+      counts[(int)x_pos] += 1;
+    }
+  }
+}
+
+static void count_vals_2d(int more_vals, int64 *counts, float8 *xs, bool *x_nulls, float8 x_min, float8 x_width, int x_count, float8 *ys, bool *y_nulls, float8 y_min, float8 y_width, int y_count) {
   size_t i;
   float8 x, y;
   float8 x_pos, y_pos;
@@ -106,8 +123,47 @@ static void count_vals(int more_vals, int64 *counts, float8 *xs, bool *x_nulls, 
 }
 
 int build_histogram(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int32 x_count,
-                    int y_fd, int y_nulls_fd, float8 y_min, float8 y_width, int32 y_count,
                     int64 *counts, char **errstr) {
+  // TODO: int64 or int32 depending....
+  float8 xs[HIST_BUFFER];
+  bool x_nulls[HIST_BUFFER];
+  int already_read = 0, x_vals_read;
+#ifdef PROFILING
+  struct timespec last_tp, tp;
+  long elapsed;
+#endif
+
+#ifdef PROFILING
+  fprintf(stderr, "another run\n");
+  if (clock_gettime(CLOCK_MONOTONIC, &last_tp)) { perror("clock failed"); exit(1); }
+#endif
+  while ((x_vals_read = load_dimension(already_read, x_fd, x_nulls_fd, xs, x_nulls, errstr))) {
+    if (x_vals_read == -1) return -1;   // errstr is already set
+
+#ifdef PROFILING
+    if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
+    elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);
+    fprintf(stderr, "reading files: %ld ns\n", elapsed);
+    last_tp = tp;
+#endif
+
+    already_read += x_vals_read;
+
+    count_vals(x_vals_read, counts, xs, x_nulls, x_min, x_width, x_count);
+#ifdef PROFILING
+    if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
+    elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);
+    fprintf(stderr, "counting vals: %ld ns\n", elapsed);
+    last_tp = tp;
+#endif
+  }
+
+  return 0;
+}
+
+int build_histogram_2d(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int32 x_count,
+                       int y_fd, int y_nulls_fd, float8 y_min, float8 y_width, int32 y_count,
+                       int64 *counts, char **errstr) {
   // TODO: int64 or int32 depending....
   float8 xs[HIST_BUFFER];
   float8 ys[HIST_BUFFER];
@@ -141,7 +197,7 @@ int build_histogram(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int3
 
     already_read += x_vals_read;
 
-    count_vals(x_vals_read, counts, xs, x_nulls, x_min, x_width, x_count, ys, y_nulls, y_min, y_width, y_count);
+    count_vals_2d(x_vals_read, counts, xs, x_nulls, x_min, x_width, x_count, ys, y_nulls, y_min, y_width, y_count);
 #ifdef PROFILING
     if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
     elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);

@@ -43,7 +43,7 @@ PG_MODULE_MAGIC;
 #define MINIMUM_SANE_DATA_DIR 3
 #endif
 
-#include "hist2d.h"
+#include "histogram.h"
 
 // Datums can be eight or four bytes wide, depending on the machine.
 // If they are eight wide, then float8s are pass-by-value.
@@ -977,6 +977,155 @@ static int open_floatfile_for_reading(char *tablespace, char *filename, int *val
   return 0;
 }
 
+Datum floatfile_to_hist(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(floatfile_to_hist);
+/**
+ * floatfile_to_hist - Uses a floatfile to build a histogram.
+ */
+Datum
+floatfile_to_hist(PG_FUNCTION_ARGS)
+{
+  // TODO: float4 instead of float8??
+  char *xs_filename;
+  int32 xs_filename_hash;
+  int x_fd = 0, x_nulls_fd = 0;
+  float8 x_min, x_width;
+  int32 x_count;
+  // Make sure `counts` has the same width as Datum
+  // so we can avoid a memcpy:
+#ifdef SAFE_TO_CAST_FLOATS_AND_DATUMS
+  int64 *counts = NULL;
+#else
+  int32 *counts = NULL;
+#endif
+  char *errstr = NULL;
+  Datum *histContent;
+  int arrayLength;
+  ArrayType *histVals;
+  int16 histTypeWidth;
+  bool histTypeByValue;
+  char histTypeAlignmentCode;
+  bool *histNulls = NULL;
+  int dims[1];
+  int lbs[1];     // Lower Bounds of each dimension
+
+  if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2) || PG_ARGISNULL(3)) {
+    PG_RETURN_NULL();
+  }
+
+  xs_filename = GET_STR(PG_GETARG_TEXT_P(0));
+
+  x_min = PG_GETARG_FLOAT8(1);
+  x_width = PG_GETARG_FLOAT8(2);
+  x_count = PG_GETARG_INT32(3);
+
+  xs_filename_hash = hash_filename(xs_filename);
+  DirectFunctionCall2(pg_advisory_lock_shared_int4, FLOATFILE_LOCK_PREFIX, xs_filename_hash);
+
+  if (open_floatfile_for_reading(NULL, xs_filename, &x_fd, &x_nulls_fd) == -1) {
+    errstr = strerror(errno);
+    goto bail;
+  }
+
+  arrayLength = x_count;
+  counts = palloc0(sizeof(counts[0]) * arrayLength);
+  histNulls = palloc0(sizeof(bool) * arrayLength);
+
+
+  build_histogram(x_fd, x_nulls_fd, x_min, x_width, x_count,
+                  counts, &errstr);
+
+bail:
+  if (x_fd       && close(x_fd))       errstr = "Can't close x_fd";
+  if (x_nulls_fd && close(x_nulls_fd)) errstr = "Can't close x_nulls_fd";
+  DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, xs_filename_hash);
+  if (errstr) elog(ERROR, "%s", errstr);
+
+  // Wrap the buckets in a new PostgreSQL array object.
+  histContent = (Datum*)counts;   // safe as long as counts is int64. TODO support 32-bit systems
+  lbs[0] = 1;
+  dims[0] = x_count;
+  get_typlenbyvalalign(INT4OID, &histTypeWidth, &histTypeByValue, &histTypeAlignmentCode);
+  histVals = construct_md_array(histContent, histNulls, 1, dims, lbs, INT4OID, histTypeWidth, histTypeByValue, histTypeAlignmentCode);
+  PG_RETURN_ARRAYTYPE_P(histVals);
+}
+
+Datum floatfile_in_tablespace_to_hist(PG_FUNCTION_ARGS);
+PG_FUNCTION_INFO_V1(floatfile_in_tablespace_to_hist);
+/**
+ * floatfile_in_tablespace_to_hist - Uses a floatfile to build a histogram.
+ */
+Datum
+floatfile_in_tablespace_to_hist(PG_FUNCTION_ARGS)
+{
+  // TODO: float4 instead of float8??
+  char *xs_tablespace = NULL;
+  char *xs_filename;
+  int32 xs_filename_hash;
+  int x_fd = 0, x_nulls_fd = 0;
+  float8 x_min, x_width;
+  int32 x_count;
+  // Make sure `counts` has the same width as Datum
+  // so we can avoid a memcpy:
+#ifdef SAFE_TO_CAST_FLOATS_AND_DATUMS
+  int64 *counts = NULL;
+#else
+  int32 *counts = NULL;
+#endif
+  char *errstr = NULL;
+  Datum *histContent;
+  int arrayLength;
+  ArrayType *histVals;
+  int16 histTypeWidth;
+  bool histTypeByValue;
+  char histTypeAlignmentCode;
+  bool *histNulls = NULL;
+  int dims[1];
+  int lbs[1];     // Lower Bounds of each dimension
+
+  if (PG_ARGISNULL(1) ||
+      PG_ARGISNULL(2) || PG_ARGISNULL(3) || PG_ARGISNULL(4)) {
+    PG_RETURN_NULL();
+  }
+
+  if (!PG_ARGISNULL(0)) xs_tablespace = GET_STR(PG_GETARG_TEXT_P(0));
+  xs_filename = GET_STR(PG_GETARG_TEXT_P(1));
+
+  x_min = PG_GETARG_FLOAT8(2);
+  x_width = PG_GETARG_FLOAT8(3);
+  x_count = PG_GETARG_INT32(4);
+
+  xs_filename_hash = hash_filename(xs_filename);
+  DirectFunctionCall2(pg_advisory_lock_shared_int4, FLOATFILE_LOCK_PREFIX, xs_filename_hash);
+
+  if (open_floatfile_for_reading(xs_tablespace, xs_filename, &x_fd, &x_nulls_fd) == -1) {
+    errstr = strerror(errno);
+    goto bail;
+  }
+
+  arrayLength = x_count;
+  counts = palloc0(sizeof(counts[0]) * arrayLength);
+  histNulls = palloc0(sizeof(bool) * arrayLength);
+
+
+  build_histogram(x_fd, x_nulls_fd, x_min, x_width, x_count,
+                  counts, &errstr);
+
+bail:
+  if (x_fd       && close(x_fd))       errstr = "Can't close x_fd";
+  if (x_nulls_fd && close(x_nulls_fd)) errstr = "Can't close x_nulls_fd";
+  DirectFunctionCall2(pg_advisory_unlock_shared_int4, FLOATFILE_LOCK_PREFIX, xs_filename_hash);
+  if (errstr) elog(ERROR, "%s", errstr);
+
+  // Wrap the buckets in a new PostgreSQL array object.
+  histContent = (Datum*)counts;   // safe as long as counts is int64. TODO support 32-bit systems
+  lbs[0] = 1;
+  dims[0] = x_count;
+  get_typlenbyvalalign(INT4OID, &histTypeWidth, &histTypeByValue, &histTypeAlignmentCode);
+  histVals = construct_md_array(histContent, histNulls, 1, dims, lbs, INT4OID, histTypeWidth, histTypeByValue, histTypeAlignmentCode);
+  PG_RETURN_ARRAYTYPE_P(histVals);
+}
+
 Datum floatfile_to_hist2d(PG_FUNCTION_ARGS);
 PG_FUNCTION_INFO_V1(floatfile_to_hist2d);
 /**
@@ -1045,9 +1194,9 @@ floatfile_to_hist2d(PG_FUNCTION_ARGS)
   histNulls = palloc0(sizeof(bool) * arrayLength);
 
 
-  build_histogram(x_fd, x_nulls_fd, x_min, x_width, x_count,
-                  y_fd, y_nulls_fd, y_min, y_width, y_count,
-                  counts, &errstr);
+  build_histogram_2d(x_fd, x_nulls_fd, x_min, x_width, x_count,
+                     y_fd, y_nulls_fd, y_min, y_width, y_count,
+                     counts, &errstr);
 
 bail:
   if (x_fd       && close(x_fd))       errstr = "Can't close x_fd";
@@ -1142,9 +1291,9 @@ floatfile_in_tablespace_to_hist2d(PG_FUNCTION_ARGS)
   histNulls = palloc0(sizeof(bool) * arrayLength);
 
 
-  build_histogram(x_fd, x_nulls_fd, x_min, x_width, x_count,
-                  y_fd, y_nulls_fd, y_min, y_width, y_count,
-                  counts, &errstr);
+  build_histogram_2d(x_fd, x_nulls_fd, x_min, x_width, x_count,
+                     y_fd, y_nulls_fd, y_min, y_width, y_count,
+                     counts, &errstr);
 
 bail:
   if (x_fd       && close(x_fd))       errstr = "Can't close x_fd";

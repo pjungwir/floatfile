@@ -163,6 +163,100 @@ SELECT save_floatfile('a', '{1,1,1,1,NULL}'::float[]);
  
 (1 row)
 
+SELECT floatfile_to_hist('a', 0::float, 1::float, 5);
+ floatfile_to_hist 
+-------------------
+ {0,4,0,0,0}
+(1 row)
+
+SELECT drop_floatfile('a');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT save_floatfile('a', '{1,1}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT floatfile_to_hist('a', -0.115::float, 0.23::float, 10);
+   floatfile_to_hist   
+-----------------------
+ {0,0,0,0,2,0,0,0,0,0}
+(1 row)
+
+SELECT drop_floatfile('a');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+-- Histogram with tablespace tests:
+CREATE TABLESPACE testspace LOCATION '/tmp/testspace';
+SELECT save_floatfile('testspace', 'a', '{1,1,1,1,NULL}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT floatfile_to_hist('testspace', 'a', 0::float, 1::float, 5);
+ floatfile_to_hist 
+-------------------
+ {0,4,0,0,0}
+(1 row)
+
+SELECT drop_floatfile('testspace', 'a');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT save_floatfile('testspace', 'a', '{1,1}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT floatfile_to_hist('testspace', 'a', -0.115::float, 0.23::float, 10);
+   floatfile_to_hist   
+-----------------------
+ {0,0,0,0,2,0,0,0,0,0}
+(1 row)
+
+SELECT drop_floatfile('testspace', 'a');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT save_floatfile(NULL, 'a', '{1,1}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
+SELECT floatfile_to_hist(NULL, 'a', -0.115::float, 0.23::float, 10);
+   floatfile_to_hist   
+-----------------------
+ {0,0,0,0,2,0,0,0,0,0}
+(1 row)
+
+SELECT drop_floatfile(NULL, 'a');
+ drop_floatfile 
+----------------
+ 
+(1 row)
+
+DROP TABLESPACE testspace;
+-- 2D Histogram tests:
+SELECT save_floatfile('a', '{1,1,1,1,NULL}'::float[]);
+ save_floatfile 
+----------------
+ 
+(1 row)
+
 SELECT save_floatfile('b', '{1,1,0,NULL,1}'::float[]);
  save_floatfile 
 ----------------
@@ -217,7 +311,7 @@ SELECT drop_floatfile('b');
  
 (1 row)
 
--- Histogram with tablespace tests:
+-- 2D histogram with tablespace tests:
 CREATE TABLESPACE testspace LOCATION '/tmp/testspace';
 SELECT save_floatfile('testspace', 'a', '{1,1,1,1,NULL}'::float[]);
  save_floatfile 
@@ -231,7 +325,7 @@ SELECT save_floatfile('testspace', 'b', '{1,1,0,NULL,1}'::float[]);
  
 (1 row)
 
-SELECT floatfile_to_hist2d('testspace', 'a','testspace',  'b', 0::float, 0::float, 1::float, 1::float, 5, 2);
+SELECT floatfile_to_hist2d('testspace', 'a', 'testspace', 'b', 0::float, 0::float, 1::float, 1::float, 5, 2);
        floatfile_to_hist2d       
 ---------------------------------
  {{0,0},{1,2},{0,0},{0,0},{0,0}}
