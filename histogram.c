@@ -22,7 +22,7 @@
 #define min(a,b) \
    ({ __typeof__ (a) _a = (a); \
        __typeof__ (b) _b = (b); \
-     _a > _b ? _a : _b; })
+     _a < _b ? _a : _b; })
 
 // posix_fadvise is not available on macOS,
 // so just turn this on for Linux for now:
@@ -47,11 +47,13 @@
  * Returns the number of values read (not the number of bytes read),
  * or -1 on an error.
  */
-static int load_dimension(int already_read, int vals_fd, int nulls_fd, float8 *vals, bool *nulls, char **errstr) {
+static int load_dimension(int already_read, int vals_fd, int nulls_fd, float8 *vals, bool *nulls, ssize_t max_vals_to_read, char **errstr) {
   ssize_t bytes_read;
   int vals_read;
 
-  bytes_read = read(vals_fd, vals, HIST_BUFFER*sizeof(float8));
+  max_vals_to_read = min(max_vals_to_read, HIST_BUFFER);
+
+  bytes_read = read(vals_fd, vals, max_vals_to_read*sizeof(float8));
   if (bytes_read == 0) {
     return 0;
   } else if (bytes_read == -1) {
@@ -68,7 +70,7 @@ static int load_dimension(int already_read, int vals_fd, int nulls_fd, float8 *v
   }
 #endif
 
-  bytes_read = read(nulls_fd, nulls, HIST_BUFFER*sizeof(bool));
+  bytes_read = read(nulls_fd, nulls, max_vals_to_read*sizeof(bool));
   if (bytes_read == -1) {
     *errstr = strerror(errno);
     return -1;
@@ -137,7 +139,7 @@ int build_histogram(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int3
   fprintf(stderr, "another run\n");
   if (clock_gettime(CLOCK_MONOTONIC, &last_tp)) { perror("clock failed"); exit(1); }
 #endif
-  while ((x_vals_read = load_dimension(already_read, x_fd, x_nulls_fd, xs, x_nulls, errstr))) {
+  while ((x_vals_read = load_dimension(already_read, x_fd, x_nulls_fd, xs, x_nulls, HIST_BUFFER, errstr))) {
     if (x_vals_read == -1) return -1;   // errstr is already set
 
 #ifdef PROFILING
@@ -161,6 +163,97 @@ int build_histogram(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int3
   return 0;
 }
 
+int build_histogram_with_bounds(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int32 x_count,
+                    int64 *counts, ssize_t min_pos, ssize_t max_pos, char **errstr) {
+  // TODO: int64 or int32 depending....
+  float8 xs[HIST_BUFFER];
+  bool x_nulls[HIST_BUFFER];
+  int already_read = 0, x_vals_read;
+  ssize_t max_vals_to_read;
+#ifdef PROFILING
+  struct timespec last_tp, tp;
+  long elapsed;
+#endif
+
+
+#ifdef PROFILING
+  fprintf(stderr, "another run\n");
+  if (clock_gettime(CLOCK_MONOTONIC, &last_tp)) { perror("clock failed"); exit(1); }
+#endif
+
+  lseek(x_nulls_fd, min_pos * sizeof(bool),   SEEK_SET);
+  lseek(x_fd,       min_pos * sizeof(float8), SEEK_SET);
+
+  max_vals_to_read = max_pos - min_pos + 1;
+  while (max_vals_to_read > 0 &&
+         (x_vals_read = load_dimension(already_read, x_fd, x_nulls_fd, xs, x_nulls, max_vals_to_read, errstr))) {
+    if (x_vals_read == -1) return -1;   // errstr is already set
+
+#ifdef PROFILING
+    if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
+    elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);
+    fprintf(stderr, "reading files: %ld ns\n", elapsed);
+    last_tp = tp;
+#endif
+
+    already_read += x_vals_read;
+    max_vals_to_read -= x_vals_read;
+
+    count_vals(x_vals_read, counts, xs, x_nulls, x_min, x_width, x_count);
+#ifdef PROFILING
+    if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
+    elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);
+    fprintf(stderr, "counting vals: %ld ns\n", elapsed);
+    last_tp = tp;
+#endif
+  }
+
+  return 0;
+}
+
+/**
+ * find_bounds_start_end - returns the start/stop file positions of values within the given range.
+ * Used to limit what is included in a histogram.
+ * If everything is less than the requested min_t, then min_pos will be -1.
+ * If everything is greater than the requested max_t, then max_pos will be -1.
+ * So if either of those parameters come back as -1, then no values are in range.
+ */
+int find_bounds_start_end(int t_fd, int t_nulls_fd, float min_t, float max_t, ssize_t *min_pos, ssize_t *max_pos, char **errstr) {
+  float8 ts[HIST_BUFFER];
+  bool t_nulls[HIST_BUFFER];
+  int already_read = 0, t_vals_read;
+  size_t i;
+  float8 t;
+  bool found_start = false;
+
+  *min_pos = -1;
+  *max_pos = -1;
+  while ((t_vals_read = load_dimension(already_read, t_fd, t_nulls_fd, ts, t_nulls, HIST_BUFFER, errstr))) {
+    if (t_vals_read == -1) return -1;   // errstr is already set
+
+    for (i = 0; i < t_vals_read; i += 1) {
+      if (t_nulls[i]) continue;
+      t = ts[i];
+
+      if (!found_start) {
+        if (t >= min_t) {
+          *min_pos = already_read + i;
+          found_start = true;
+        }
+      }
+      if (t > max_t) {
+        *max_pos = already_read + i - 1;  // could be -1
+        return 0;
+      }
+    }
+
+    already_read += t_vals_read;
+  }
+
+  *max_pos = already_read;
+  return 0;
+}
+
 int build_histogram_2d(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int32 x_count,
                        int y_fd, int y_nulls_fd, float8 y_min, float8 y_width, int32 y_count,
                        int64 *counts, char **errstr) {
@@ -179,10 +272,10 @@ int build_histogram_2d(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, i
   fprintf(stderr, "another run\n");
   if (clock_gettime(CLOCK_MONOTONIC, &last_tp)) { perror("clock failed"); exit(1); }
 #endif
-  while ((x_vals_read = load_dimension(already_read, x_fd, x_nulls_fd, xs, x_nulls, errstr))) {
+  while ((x_vals_read = load_dimension(already_read, x_fd, x_nulls_fd, xs, x_nulls, HIST_BUFFER, errstr))) {
     if (x_vals_read == -1) return -1;   // errstr is already set
 
-    y_vals_read = load_dimension(already_read, y_fd, y_nulls_fd, ys, y_nulls, errstr);
+    y_vals_read = load_dimension(already_read, y_fd, y_nulls_fd, ys, y_nulls, HIST_BUFFER, errstr);
     if (y_vals_read == -1) return -1;   // errstr is already set
     if (x_vals_read != y_vals_read) {
       *errstr = "read unequals xs and ys";
@@ -196,6 +289,64 @@ int build_histogram_2d(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, i
 #endif
 
     already_read += x_vals_read;
+
+    count_vals_2d(x_vals_read, counts, xs, x_nulls, x_min, x_width, x_count, ys, y_nulls, y_min, y_width, y_count);
+#ifdef PROFILING
+    if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
+    elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);
+    fprintf(stderr, "counting vals: %ld ns\n", elapsed);
+    last_tp = tp;
+#endif
+  }
+
+  return 0;
+}
+
+int build_histogram_2d_with_bounds(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, int32 x_count,
+                                   int y_fd, int y_nulls_fd, float8 y_min, float8 y_width, int32 y_count,
+                                   int64 *counts, ssize_t min_pos, ssize_t max_pos, char **errstr) {
+  // TODO: int64 or int32 depending....
+  float8 xs[HIST_BUFFER];
+  float8 ys[HIST_BUFFER];
+  bool x_nulls[HIST_BUFFER];
+  bool y_nulls[HIST_BUFFER];
+  int already_read = 0, x_vals_read, y_vals_read;
+  ssize_t max_vals_to_read;
+#ifdef PROFILING
+  struct timespec last_tp, tp;
+  long elapsed;
+#endif
+
+#ifdef PROFILING
+  fprintf(stderr, "another run\n");
+  if (clock_gettime(CLOCK_MONOTONIC, &last_tp)) { perror("clock failed"); exit(1); }
+#endif
+  lseek(x_nulls_fd, min_pos * sizeof(bool),   SEEK_SET);
+  lseek(x_fd,       min_pos * sizeof(float8), SEEK_SET);
+  lseek(y_nulls_fd, min_pos * sizeof(bool),   SEEK_SET);
+  lseek(y_fd,       min_pos * sizeof(float8), SEEK_SET);
+
+  max_vals_to_read = max_pos - min_pos + 1;
+  while (max_vals_to_read > 0 &&
+         (x_vals_read = load_dimension(already_read, x_fd, x_nulls_fd, xs, x_nulls, max_vals_to_read, errstr))) {
+    if (x_vals_read == -1) return -1;   // errstr is already set
+
+    y_vals_read = load_dimension(already_read, y_fd, y_nulls_fd, ys, y_nulls, max_vals_to_read, errstr);
+    if (y_vals_read == -1) return -1;   // errstr is already set
+    if (x_vals_read != y_vals_read) {
+      *errstr = "read unequals xs and ys";
+      return -1;
+    }
+
+#ifdef PROFILING
+    if (clock_gettime(CLOCK_MONOTONIC, &tp)) { perror("clock failed"); exit(1); }
+    elapsed = 1000000000*(tp.tv_sec - last_tp.tv_sec) + (tp.tv_nsec - last_tp.tv_nsec);
+    fprintf(stderr, "reading files: %ld ns\n", elapsed);
+    last_tp = tp;
+#endif
+
+    already_read += x_vals_read;
+    max_vals_to_read -= x_vals_read;
 
     count_vals_2d(x_vals_read, counts, xs, x_nulls, x_min, x_width, x_count, ys, y_nulls, y_min, y_width, y_count);
 #ifdef PROFILING
