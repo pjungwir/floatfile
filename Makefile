@@ -21,6 +21,7 @@ README.html: README.md
 	jq --slurp --raw-input '{"text": "\(.)", "mode": "markdown"}' < README.md | curl --data @- https://api.github.com/markdown > README.html
 
 release:
+	git tag v$(EXTENSION_VERSION)
 	git archive --format zip --prefix=$(EXTENSION)-$(EXTENSION_VERSION)/ --output $(EXTENSION)-$(EXTENSION_VERSION).zip master
 
 .PHONY: release
