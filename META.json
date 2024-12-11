@@ -1,15 +1,15 @@
 {
   "name": "floatfile",
   "abstract": "Simple file storage for arrays of floats",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "maintainer": "Paul A. Jungwirth <pj@illuminatedcomputing.com>",
   "license": "mit",
   "provides": {
     "floatfile": {
       "abstract": "Simple file storage for arrays of floats",
-      "file": "floatfile--1.3.0.sql",
+      "file": "floatfile--1.3.1.sql",
       "docfile": "README.md",
-      "version": "1.3.0"
+      "version": "1.3.1"
     }
   },
   "resources": {
