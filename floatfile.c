@@ -82,10 +82,17 @@ static void floatfile_root_path(const char *tablespace, char *path, int path_len
   // from src/backend/commands/tablecmds.c:
   if (OidIsValid(tablespace_oid) && tablespace_oid != MyDatabaseTableSpace) {
     AclResult aclresult;
+#if PG_VERSION_NUM < 160000
     aclresult = pg_tablespace_aclcheck(tablespace_oid, GetUserId(), ACL_CREATE);
     if (aclresult != ACLCHECK_OK) {
-      aclcheck_error(aclresult, ACL_KIND_TABLESPACE, get_tablespace_name(tablespace_oid));
+      aclcheck_error(aclresult, OBJECT_TABLESPACE, get_tablespace_name(tablespace_oid));
     }
+#else
+    aclresult = object_aclcheck(TableSpaceRelationId, tablespace_oid, GetUserId(), ACL_CREATE);
+    if (aclresult != ACLCHECK_OK) {
+      aclcheck_error(aclresult, OBJECT_TABLESPACE, get_tablespace_name(tablespace_oid));
+    }
+#endif
   }
   if (tablespace_oid == GLOBALTABLESPACE_OID) {
     ereport(ERROR,
@@ -535,7 +542,7 @@ static ArrayType *_load_floatfile(const char *tablespace, const char *filename) 
   {
     arrlen = load_file_to_floats(tablespace, filename, &floats, &nulls);
     if (arrlen < 0) {
-      ereport(ERROR, (errmsg("Failed to load floatfile %s: %s", filename, strerror(errno))));
+      ereport(ERROR, (errmsg("Failed to load floatfile %s: %m", filename)));
     }
 
     // I don't think we can use the preprocessor here
@@ -665,7 +672,7 @@ static void _save_floatfile(const char *tablespace, const char *filename, ArrayT
   PG_TRY();
   {
     if (save_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
-      ereport(ERROR, (errmsg("Failed to save floatfile %s: %s", filename, strerror(errno))));
+      ereport(ERROR, (errmsg("Failed to save floatfile %s: %m", filename)));
     }
   }
   PG_CATCH();
@@ -783,7 +790,7 @@ static void _extend_floatfile(const char *tablespace, const char *filename, Arra
   PG_TRY();
   {
     if (extend_file_from_floats(tablespace, filename, floats, nulls, arrlen)) {
-      ereport(ERROR, (errmsg("Failed to extend floatfile %s: %s", filename, strerror(errno))));
+      ereport(ERROR, (errmsg("Failed to extend floatfile %s: %m", filename)));
     }
   }
   PG_CATCH();
@@ -873,10 +880,10 @@ static void _drop_floatfile(const char *tablespace, const char *filename) {
   DirectFunctionCall2(pg_advisory_lock_int4, FLOATFILE_LOCK_PREFIX, filename_hash);
   PG_TRY();
   {
-    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete floatfile %s: %s", filename, strerror(errno))));
+    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete floatfile %s: %m", filename)));
 
     path[pathlen - 1] = FLOATFILE_FLOATS_SUFFIX;
-    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete floatfile %s: %s", filename, strerror(errno))));
+    if (unlink(path)) ereport(ERROR, (errmsg("Failed to delete floatfile %s: %m", filename)));
 
     // If that was the last file, remove the floatfile dir too
     // so users can drop the tablespace:
@@ -884,7 +891,7 @@ static void _drop_floatfile(const char *tablespace, const char *filename) {
     floatfile_root_path(tablespace, root_directory, FLOATFILE_MAX_PATH + 1);
     floatfile_relative_target_path(filename, relative_target, FLOATFILE_MAX_PATH + 1);
     if (rmdirs_for_floatfile(root_directory, relative_target)) {
-      ereport(ERROR, (errmsg("Failed in rmdirs_for_floatfile: %s", strerror(errno))));
+      ereport(ERROR, (errmsg("Failed in rmdirs_for_floatfile: %m")));
     }
   }
   PG_CATCH();

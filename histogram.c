@@ -278,7 +278,7 @@ int build_histogram_2d(int x_fd, int x_nulls_fd, float8 x_min, float8 x_width, i
     y_vals_read = load_dimension(already_read, y_fd, y_nulls_fd, ys, y_nulls, HIST_BUFFER, errstr);
     if (y_vals_read == -1) return -1;   // errstr is already set
     if (x_vals_read != y_vals_read) {
-      *errstr = "read unequals xs and ys";
+      *errstr = "read unequal xs and ys";
       return -1;
     }
 #ifdef PROFILING
@@ -334,7 +334,7 @@ int build_histogram_2d_with_bounds(int x_fd, int x_nulls_fd, float8 x_min, float
     y_vals_read = load_dimension(already_read, y_fd, y_nulls_fd, ys, y_nulls, max_vals_to_read, errstr);
     if (y_vals_read == -1) return -1;   // errstr is already set
     if (x_vals_read != y_vals_read) {
-      *errstr = "read unequals xs and ys";
+      *errstr = "read unequal xs and ys";
       return -1;
     }
 
