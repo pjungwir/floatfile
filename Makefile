@@ -1,7 +1,7 @@
 MODULE_big = floatfile
 EXTENSION = floatfile
 EXTENSION_VERSION = 1.3.1
-DATA = $(EXTENSION)--$(EXTENSION_VERSION).sql
+DATA = $(EXTENSION)--$(EXTENSION_VERSION).sql $(EXTENSION)--1.3.0--1.3.1.sql
 REGRESS = $(EXTENSION)_test
 OBJS = floatfile.o histogram.o $(WIN32RES)
 # PG_CPPFLAGS = -pg
